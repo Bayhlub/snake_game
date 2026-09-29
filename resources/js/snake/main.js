@@ -1,6 +1,7 @@
 import { BOTS, COLS, DIRECTIONS, ROWS } from './config.js';
 import { createRenderer } from './renderer.js';
 import { createSound } from './sound.js';
+import { directionToward } from './steering.js';
 import { createWorld, getPlayer, isReverse, step, tickDuration } from './world.js';
 
 const KEY_DIRECTIONS = {
@@ -14,7 +15,6 @@ const KEY_DIRECTIONS = {
     d: 'right',
 };
 const MAX_QUEUED_TURNS = 3;
-const SWIPE_MIN_PX = 24;
 
 const storage = {
     get(key) {
@@ -67,6 +67,7 @@ export function startSnakeGame(root) {
     let world = createWorld();
     let state = 'ready';
     let turnQueue = [];
+    let pointerTarget = null;
     let accumulated = 0;
     let lastFrame = performance.now();
     let best = Number(storage.get('snake.best')) || 0;
@@ -81,6 +82,7 @@ export function startSnakeGame(root) {
     function newGame() {
         world = createWorld();
         turnQueue = [];
+        pointerTarget = null;
         accumulated = 0;
         state = 'playing';
         showOverlay(null);
@@ -101,6 +103,7 @@ export function startSnakeGame(root) {
     }
 
     function queueTurn(name) {
+        pointerTarget = null;
         if (state === 'ready') {
             newGame();
         }
@@ -126,7 +129,8 @@ export function startSnakeGame(root) {
 
             while (accumulated >= duration && state === 'playing') {
                 accumulated -= duration;
-                handleEvents(step(world, turnQueue.shift(), duration), duration - accumulated);
+                const turn = turnQueue.shift() ?? (pointerTarget && directionToward(getPlayer(world), pointerTarget, world));
+                handleEvents(step(world, turn, duration), duration - accumulated);
                 updateHud();
 
                 if (world.over) {
@@ -137,7 +141,7 @@ export function startSnakeGame(root) {
         }
 
         const isMoving = state === 'playing' || state === 'paused';
-        renderer.draw(world, now, isMoving ? Math.min(accumulated / tickDuration(world), 1) : 1);
+        renderer.draw(world, now, isMoving ? Math.min(accumulated / tickDuration(world), 1) : 1, state === 'playing' ? pointerTarget : null);
         requestAnimationFrame(frame);
     }
 
@@ -294,22 +298,36 @@ export function startSnakeGame(root) {
         }
     });
 
-    let touchStart = null;
-    elements.canvas.addEventListener('touchstart', (event) => {
-        touchStart = { x: event.touches[0].clientX, y: event.touches[0].clientY };
-    }, { passive: true });
-    elements.canvas.addEventListener('touchend', (event) => {
-        if (!touchStart) {
-            return;
+    /**
+     * Mouse: the snake follows the pointer while it is over the board.
+     * Touch: the snake follows the finger while it is down, then keeps going straight.
+     */
+    function pointerCell(event) {
+        const rect = elements.canvas.getBoundingClientRect();
+        return {
+            x: Math.min(COLS - 1, Math.max(0, Math.floor(((event.clientX - rect.left) / rect.width) * COLS))),
+            y: Math.min(ROWS - 1, Math.max(0, Math.floor(((event.clientY - rect.top) / rect.height) * ROWS))),
+        };
+    }
+
+    elements.canvas.addEventListener('pointerdown', (event) => {
+        if (event.pointerType !== 'mouse') {
+            elements.canvas.setPointerCapture(event.pointerId);
         }
-        const dx = event.changedTouches[0].clientX - touchStart.x;
-        const dy = event.changedTouches[0].clientY - touchStart.y;
-        touchStart = null;
-        if (Math.max(Math.abs(dx), Math.abs(dy)) < SWIPE_MIN_PX) {
-            return;
-        }
-        queueTurn(Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up'));
+        pointerTarget = pointerCell(event);
     });
+    elements.canvas.addEventListener('pointermove', (event) => {
+        if (event.pointerType === 'mouse' || elements.canvas.hasPointerCapture(event.pointerId)) {
+            pointerTarget = pointerCell(event);
+        }
+    });
+    for (const type of ['pointerup', 'pointercancel']) {
+        elements.canvas.addEventListener(type, (event) => {
+            if (event.pointerType !== 'mouse') {
+                pointerTarget = null;
+            }
+        });
+    }
 
     root.querySelectorAll('[data-direction]').forEach((button) => {
         button.addEventListener('pointerdown', (event) => {

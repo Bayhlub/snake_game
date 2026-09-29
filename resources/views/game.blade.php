@@ -41,7 +41,7 @@
 
                     <div class="rounded-[1.1rem] bg-linear-to-br from-emerald-300/70 via-lime-300/20 to-teal-400/60 p-[3px] shadow-[0_0_70px_-15px_rgba(52,211,153,0.55)]">
                         <div class="relative">
-                            <canvas id="game-board" class="block h-auto w-full touch-none rounded-2xl" aria-label="Snake game board"></canvas>
+                            <canvas id="game-board" class="block h-auto w-full cursor-crosshair touch-none rounded-2xl" aria-label="Snake game board"></canvas>
 
                             <p id="event-message" class="pointer-events-none absolute top-3 left-1/2 -translate-x-1/2 rounded-full bg-black/60 px-4 py-1 text-sm font-semibold whitespace-nowrap opacity-0 transition-opacity duration-300" aria-live="polite"></p>
 
@@ -91,10 +91,11 @@
                     </div>
 
                     <p class="mt-3 text-center text-sm text-emerald-200/60 pointer-coarse:hidden">
-                        <kbd class="kbd">←</kbd> <kbd class="kbd">↑</kbd> <kbd class="kbd">↓</kbd> <kbd class="kbd">→</kbd> or <kbd class="kbd">WASD</kbd> to move ·
+                        🖱️ Move your mouse over the board to steer, or use
+                        <kbd class="kbd">←</kbd> <kbd class="kbd">↑</kbd> <kbd class="kbd">↓</kbd> <kbd class="kbd">→</kbd> / <kbd class="kbd">WASD</kbd> ·
                         <kbd class="kbd">P</kbd> pause · <kbd class="kbd">M</kbd> sound
                     </p>
-                    <p class="mt-3 hidden text-center text-sm text-emerald-200/60 pointer-coarse:block">Swipe on the board or use the buttons to move.</p>
+                    <p class="mt-3 hidden text-center text-sm text-emerald-200/60 pointer-coarse:block">👆 Touch and drag on the board. The snake follows your finger. Or use the buttons.</p>
                 </main>
 
                 <aside class="space-y-4">

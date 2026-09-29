@@ -76,7 +76,7 @@ export function createRenderer(canvas, cols, rows) {
             pending.push({ event, runAt: performance.now() + (event.type === 'playerDied' ? 0 : delayMs) });
         },
 
-        draw(world, now, progress) {
+        draw(world, now, progress, target = null) {
             const elapsed = Math.min((now - lastNow) / 1000, 0.1);
             lastNow = now;
             lastProgress = progress;
@@ -97,6 +97,10 @@ export function createRenderer(canvas, cols, rows) {
                     foodBornAt.set(food, now);
                 }
                 drawFood(ctx, food, world, now, now - foodBornAt.get(food));
+            }
+
+            if (target) {
+                drawTarget(ctx, target, now);
             }
 
             for (const snake of world.snakes) {
@@ -362,6 +366,31 @@ function drawFood(ctx, food, world, now, age) {
     ctx.beginPath();
     ctx.arc(cx, cy, size, 0, Math.PI * 2);
     ctx.fill();
+}
+
+/**
+ * A soft pulsing ring where the mouse or finger is steering the snake.
+ */
+function drawTarget(ctx, target, now) {
+    const cx = target.x * CELL + CELL / 2;
+    const cy = target.y * CELL + CELL / 2;
+    const pulse = (now / 900) % 1;
+
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1.5;
+    ctx.globalAlpha = 0.5;
+    ctx.beginPath();
+    ctx.arc(cx, cy, CELL * 0.45, 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.globalAlpha = 0.45 * (1 - pulse);
+    ctx.beginPath();
+    ctx.arc(cx, cy, CELL * (0.45 + pulse * 0.6), 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.globalAlpha = 0.6;
+    circle(ctx, cx, cy, 2, '#ffffff');
+    ctx.globalAlpha = 1;
 }
 
 function drawSparkle(ctx, x, y, size) {
