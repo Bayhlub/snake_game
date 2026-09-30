@@ -21,4 +21,17 @@
 
 body {
     background-image: radial-gradient(ellipse at top, rgb(16 60 40 / 0.45), transparent 60%);
+    /* Feel like an app on phones: no pull-to-refresh, double-tap zoom or long-press text selection. */
+    overscroll-behavior: none;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-user-select: none;
+    user-select: none;
+    /* Keep content clear of the notch and home bar when installed. */
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+
+input {
+    -webkit-user-select: text;
+    user-select: text;
 }

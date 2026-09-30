@@ -196,19 +196,17 @@ export function startSnakeGame(root) {
         elements.saveStatus.textContent = 'Saving…';
 
         try {
-            const response = await fetch(elements.saveForm.action, {
-                method: 'POST',
-                headers: {
-                    Accept: 'application/json',
-                    'Content-Type': 'application/json',
-                    'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content,
-                },
-                body: JSON.stringify({
-                    player_name: name,
-                    points: world.points,
-                    length: getPlayer(world).body.length,
-                }),
+            const body = JSON.stringify({
+                player_name: name,
+                points: world.points,
+                length: getPlayer(world).body.length,
             });
+            let response = await postScore(body);
+            if (response.status === 419) {
+                // The installed app may have opened a cached page whose session token has expired.
+                await refreshCsrfToken();
+                response = await postScore(body);
+            }
             const data = await response.json();
 
             if (!response.ok) {
@@ -226,6 +224,30 @@ export function startSnakeGame(root) {
             elements.saveStatus.textContent = 'Could not reach the server. Try again.';
             elements.saveButton.disabled = false;
         }
+    }
+
+    function postScore(body) {
+        return fetch(elements.saveForm.action, {
+            method: 'POST',
+            headers: {
+                Accept: 'application/json',
+                'Content-Type': 'application/json',
+                'X-CSRF-TOKEN': csrfMeta().content,
+            },
+            body,
+        });
+    }
+
+    async function refreshCsrfToken() {
+        const html = await (await fetch('/', { cache: 'no-store' })).text();
+        const fresh = new DOMParser().parseFromString(html, 'text/html').querySelector('meta[name="csrf-token"]');
+        if (fresh) {
+            csrfMeta().content = fresh.content;
+        }
+    }
+
+    function csrfMeta() {
+        return document.querySelector('meta[name="csrf-token"]');
     }
 
     function renderLeaderboard(scores) {

@@ -2,10 +2,19 @@
 <html lang="{{ str_replace('_', '-', app()->getLocale()) }}">
     <head>
         <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
         <meta name="csrf-token" content="{{ csrf_token() }}">
 
         <title>{{ config('app.name') }}</title>
+
+        <link rel="manifest" href="/manifest.json">
+        <meta name="theme-color" content="#07100c">
+        <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
+        <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+        <meta name="mobile-web-app-capable" content="yes">
+        <meta name="apple-mobile-web-app-capable" content="yes">
+        <meta name="apple-mobile-web-app-title" content="Snake">
+        <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 
         @fonts
         @vite(['resources/css/app.css', 'resources/js/app.js'])
@@ -20,7 +29,10 @@
                     </h1>
                     <p class="mt-1 text-sm text-emerald-200/70">Eat food and fruit, grow long, and don't crash into the other snakes.</p>
                 </div>
-                <button id="sound-toggle" type="button" class="shrink-0 rounded-full bg-white/5 px-4 py-2 text-sm font-medium ring-1 ring-white/10 transition hover:bg-white/10"></button>
+                <div class="flex shrink-0 flex-wrap justify-end gap-2">
+                    <button id="install-button" type="button" hidden class="rounded-full bg-emerald-400 px-4 py-2 text-sm font-bold text-emerald-950 transition hover:bg-emerald-300">📲 Install app</button>
+                    <button id="sound-toggle" type="button" class="rounded-full bg-white/5 px-4 py-2 text-sm font-medium ring-1 ring-white/10 transition hover:bg-white/10"></button>
+                </div>
             </header>
 
             <div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_17rem]">
