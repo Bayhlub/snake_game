@@ -13,10 +13,17 @@ import {
     FRUIT_SPAWN_MAX_MS,
     FRUIT_SPAWN_MIN_MS,
     FRUITS,
+    MAGNET_RADIUS,
     MAX_FRUITS,
     MIN_TICK_MS,
     PLAYER,
+    POWER_UP_LIFETIME_MS,
+    POWER_UP_SPAWN_MAX_MS,
+    POWER_UP_SPAWN_MIN_MS,
+    POWER_UPS,
     ROWS,
+    SHIELD_GRACE_MS,
+    SLOW_MO_FACTOR,
     START_LENGTH,
     START_TICK_MS,
     TICK_MS_PER_SEGMENT,
@@ -33,6 +40,9 @@ export function createWorld(random = Math.random) {
         foods: [],
         time: 0,
         nextFruitAt: randomBetween(random, FRUIT_SPAWN_MIN_MS, FRUIT_SPAWN_MAX_MS),
+        nextPowerUpAt: randomBetween(random, POWER_UP_SPAWN_MIN_MS, POWER_UP_SPAWN_MAX_MS),
+        /** Power-up type (plus 'grace' after a shield breaks) => game time it lasts until. */
+        effects: {},
         points: 0,
         over: false,
         deathCause: null,
@@ -63,11 +73,26 @@ export function getPlayer(world) {
 }
 
 /**
- * How long one move takes; the game speeds up as the player grows.
+ * How long one move takes; the game speeds up as the player grows, and slow-mo stretches it.
  */
 export function tickDuration(world) {
     const growth = getPlayer(world).body.length - START_LENGTH;
-    return Math.max(MIN_TICK_MS, START_TICK_MS - growth * TICK_MS_PER_SEGMENT);
+    const duration = Math.max(MIN_TICK_MS, START_TICK_MS - growth * TICK_MS_PER_SEGMENT);
+    return isEffectActive(world, 'slow') ? duration * SLOW_MO_FACTOR : duration;
+}
+
+export function isEffectActive(world, type) {
+    return (world.effects[type] ?? 0) > world.time;
+}
+
+/**
+ * The player's running power-ups with the time left, for the HUD.
+ */
+export function activePowerUps(world) {
+    return POWER_UPS.filter((powerUp) => isEffectActive(world, powerUp.type)).map((powerUp) => ({
+        ...powerUp,
+        remainingMs: world.effects[powerUp.type] - world.time,
+    }));
 }
 
 /**
@@ -77,8 +102,19 @@ export function step(world, playerDirection, elapsedMs) {
     const events = [];
     world.time += elapsedMs;
 
+    for (const powerUp of POWER_UPS) {
+        if (world.effects[powerUp.type] && !isEffectActive(world, powerUp.type)) {
+            delete world.effects[powerUp.type];
+            events.push({ type: 'powerUpEnded', powerUp });
+        }
+    }
+    for (const food of world.foods) {
+        food.from = null;
+    }
+
     respawnBots(world);
     updateFruit(world);
+    updatePowerUps(world);
 
     const grid = occupancyGrid(world);
     const movers = world.snakes.filter((snake) => snake.alive);
@@ -104,7 +140,14 @@ export function step(world, playerDirection, elapsedMs) {
         }
     }
 
-    for (const [snake, cause] of findCrashes(world, movers)) {
+    const crashes = findCrashes(world, movers);
+    const player = getPlayer(world);
+    if (crashes.has(player) && isEffectActive(world, 'shield')) {
+        events.push(breakShield(world, player, crashes.get(player)));
+        crashes.delete(player);
+    }
+
+    for (const [snake, cause] of crashes) {
         const at = { ...snake.body[0] };
         killSnake(world, snake, cause);
         events.push({ type: snake.isPlayer ? 'playerDied' : 'botDied', snake, cause, at });
@@ -112,14 +155,94 @@ export function step(world, playerDirection, elapsedMs) {
 
     for (const snake of movers) {
         if (snake.alive) {
-            const food = eatFoodAt(world, snake);
+            const food = takeFoodAt(world, snake, snake.body[0]);
             if (food) {
-                events.push({ type: food.kind === 'fruit' ? 'fruit' : 'eat', snake, food });
+                events.push(eat(world, snake, food));
             }
         }
     }
 
+    events.push(...pullFoodToPlayer(world));
     refillFood(world);
+
+    return events;
+}
+
+/**
+ * The shield takes the hit instead of the player. Hitting a wall bounces the snake
+ * back and turns it toward open space; then it can't hit snakes for a moment.
+ */
+function breakShield(world, player, cause) {
+    delete world.effects.shield;
+    world.effects.grace = world.time + SHIELD_GRACE_MS;
+
+    if (cause.type === 'wall') {
+        player.body = player.previousBody.map((cell) => ({ ...cell }));
+        player.dir = escapeDirection(world, player);
+    }
+
+    return { type: 'shieldBroke', snake: player, at: { ...player.body[0] } };
+}
+
+function escapeDirection(world, snake) {
+    const head = snake.body[0];
+    const roomToward = (dir) => {
+        let room = 0;
+        while (isInside(world, head.x + dir.x * (room + 1), head.y + dir.y * (room + 1))) {
+            room++;
+        }
+        return room;
+    };
+
+    return Object.values(DIRECTIONS)
+        .filter((dir) => dir !== snake.dir && !isReverse(dir, snake.dir))
+        .sort((a, b) => roomToward(b) - roomToward(a))[0];
+}
+
+/**
+ * The player is see-through while a ghost, and just after a shield breaks.
+ */
+function isIntangible(world, snake) {
+    return snake.isPlayer && (isEffectActive(world, 'ghost') || isEffectActive(world, 'grace'));
+}
+
+/**
+ * Magnet: food near the player's head slides one cell closer each move, and food
+ * within two cells is pulled straight in (so it can't trail diagonally beside the head).
+ */
+function pullFoodToPlayer(world) {
+    const player = getPlayer(world);
+    if (!player.alive || !isEffectActive(world, 'magnet')) {
+        return [];
+    }
+
+    const head = player.body[0];
+    const grid = occupancyGrid(world);
+    const events = [];
+
+    for (const food of [...world.foods]) {
+        const dx = head.x - food.x;
+        const dy = head.y - food.y;
+        const distance = Math.abs(dx) + Math.abs(dy);
+        if (food.kind === 'power' || distance === 0 || distance > MAGNET_RADIUS) {
+            continue;
+        }
+
+        if (distance <= 2) {
+            food.from = { x: food.x, y: food.y };
+            world.foods.splice(world.foods.indexOf(food), 1);
+            events.push(eat(world, player, food));
+            continue;
+        }
+
+        const x = food.x + (Math.abs(dx) >= Math.abs(dy) ? Math.sign(dx) : 0);
+        const y = food.y + (Math.abs(dx) >= Math.abs(dy) ? 0 : Math.sign(dy));
+        if (!grid[y * world.cols + x] && !foodAt(world, x, y)) {
+            food.from = { x: food.x, y: food.y };
+            food.x = x;
+            food.y = y;
+        }
+    }
 
     return events;
 }
@@ -150,7 +273,9 @@ function findCrashes(world, movers) {
             continue;
         }
 
-        const other = cells.get(head.y * world.cols + head.x).find((occupant) => occupant.snake !== snake);
+        const other = cells
+            .get(head.y * world.cols + head.x)
+            .find((occupant) => occupant.snake !== snake && !isIntangible(world, occupant.snake) && !isIntangible(world, snake));
         if (other) {
             crashes.set(snake, { type: other.index === 0 ? 'headOn' : 'hit', other: other.snake });
         }
@@ -184,23 +309,32 @@ function killSnake(world, snake, cause) {
     snake.respawnAt = world.time + BOT_RESPAWN_MS;
 }
 
-function eatFoodAt(world, snake) {
-    const head = snake.body[0];
-    const index = world.foods.findIndex((food) => food.x === head.x && food.y === head.y);
-    if (index === -1) {
-        return null;
+/**
+ * Remove and return the food at a cell. Only the player can pick up power-ups.
+ */
+function takeFoodAt(world, snake, cell) {
+    const index = world.foods.findIndex(
+        (food) => food.x === cell.x && food.y === cell.y && (snake.isPlayer || food.kind !== 'power'),
+    );
+    return index === -1 ? null : world.foods.splice(index, 1)[0];
+}
+
+function eat(world, snake, food) {
+    const at = { ...snake.body[0] };
+
+    if (food.kind === 'power') {
+        world.effects[food.powerUp.type] = world.time + food.powerUp.durationMs;
+        return { type: 'powerUp', snake, food, powerUp: food.powerUp, at };
     }
 
-    const [food] = world.foods.splice(index, 1);
     snake.growth += food.grow;
-
     if (snake.isPlayer) {
         world.points += food.points;
     } else {
         snake.growth = Math.min(snake.growth, Math.max(0, BOT_MAX_LENGTH - snake.body.length));
     }
 
-    return food;
+    return { type: food.kind === 'fruit' ? 'fruit' : 'eat', snake, food, at };
 }
 
 function respawnBots(world) {
@@ -233,6 +367,28 @@ function updateFruit(world) {
             points: fruit.points,
             grow: fruit.grow,
             expiresAt: world.time + FRUIT_LIFETIME_MS,
+        });
+    }
+}
+
+/**
+ * Every so often a power-up appears somewhere empty; at most one is on the board at a time.
+ */
+function updatePowerUps(world) {
+    if (world.time < world.nextPowerUpAt) {
+        return;
+    }
+
+    world.nextPowerUpAt = world.time + randomBetween(world.random, POWER_UP_SPAWN_MIN_MS, POWER_UP_SPAWN_MAX_MS);
+    const cell = world.foods.some((food) => food.kind === 'power') ? null : randomFreeCell(world);
+    if (cell) {
+        world.foods.push({
+            kind: 'power',
+            ...cell,
+            powerUp: pickWeighted(world.random, POWER_UPS),
+            points: 0,
+            grow: 0,
+            expiresAt: world.time + POWER_UP_LIFETIME_MS,
         });
     }
 }

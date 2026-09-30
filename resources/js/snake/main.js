@@ -1,8 +1,9 @@
 import { BOTS, COLS, DIRECTIONS, ROWS } from './config.js';
+import { describeBotCrash, describePlayerCrash, pickLanguage, translator } from './i18n.js';
 import { createRenderer } from './renderer.js';
 import { createSound } from './sound.js';
 import { directionToward } from './steering.js';
-import { createWorld, getPlayer, isReverse, step, tickDuration } from './world.js';
+import { activePowerUps, createWorld, getPlayer, isReverse, step, tickDuration } from './world.js';
 
 const KEY_DIRECTIONS = {
     ArrowUp: 'up',
@@ -59,9 +60,15 @@ export function startSnakeGame(root) {
         leaderboardEmpty: $('#leaderboard-empty'),
         leaderboardRow: $('#leaderboard-row'),
         soundToggle: $('#sound-toggle'),
+        powerUps: $('#power-ups'),
+        powerUpChip: $('#power-up-chip'),
+        languageButtons: root.querySelectorAll('[data-language]'),
     };
 
-    const renderer = createRenderer(elements.canvas, COLS, ROWS);
+    let language = pickLanguage(storage.get('snake.lang'), navigator.languages ?? [navigator.language]);
+    let t = translator(language);
+
+    const renderer = createRenderer(elements.canvas, COLS, ROWS, { label: (powerUp) => t(`powerUp.${powerUp.type}`) });
     const sound = createSound(storage.get('snake.muted') === '1');
 
     let world = createWorld();
@@ -72,10 +79,12 @@ export function startSnakeGame(root) {
     let lastFrame = performance.now();
     let best = Number(storage.get('snake.best')) || 0;
     let messageTimer = null;
+    /** The save form's status as a translation key, so it can be re-shown in another language. */
+    let saveStatus = null;
 
     elements.playerName.value = storage.get('snake.name') ?? '';
     renderLeaderboard(JSON.parse($('#leaderboard-data').textContent));
-    updateSoundToggle();
+    applyLanguage();
     updateHud();
     showOverlay('ready');
 
@@ -155,9 +164,18 @@ export function startSnakeGame(root) {
                 sound.fruit();
             } else if (event.type === 'botDied') {
                 sound.botDied();
-                showMessage(describeBotCrash(event.snake, event.cause));
+                showMessage(describeBotCrash(t, event.snake, event.cause));
             } else if (event.type === 'playerDied') {
                 sound.playerDied();
+            } else if (event.type === 'powerUp') {
+                sound.powerUp();
+                showMessage(t('powerUpGot', { emoji: event.powerUp.emoji, label: t(`powerUp.${event.powerUp.type}`) }));
+            } else if (event.type === 'shieldBroke') {
+                sound.shieldBroke();
+                showMessage(t('shieldSaved'));
+            } else if (event.type === 'powerUpEnded') {
+                sound.powerUpEnded();
+                showMessage(t('powerUpEnded', { label: t(`powerUp.${event.powerUp.type}`) }));
             }
         }
     }
@@ -171,13 +189,13 @@ export function startSnakeGame(root) {
             storage.set('snake.best', String(best));
         }
 
-        elements.deathCause.textContent = describePlayerCrash(world.deathCause);
+        elements.deathCause.textContent = describePlayerCrash(t, world.deathCause);
         elements.finalScore.textContent = world.points;
         elements.finalLength.textContent = player.body.length;
         elements.newBest.hidden = !isNewBest;
         elements.saveForm.hidden = world.points === 0;
         elements.saveButton.disabled = false;
-        elements.saveStatus.textContent = '';
+        setSaveStatus(null);
         updateHud();
         showOverlay('over');
     }
@@ -186,14 +204,14 @@ export function startSnakeGame(root) {
         event.preventDefault();
         const name = elements.playerName.value.trim();
         if (!name) {
-            elements.saveStatus.textContent = 'Please type your name first.';
+            setSaveStatus('typeName');
             elements.playerName.focus();
             return;
         }
 
         storage.set('snake.name', name);
         elements.saveButton.disabled = true;
-        elements.saveStatus.textContent = 'Saving…';
+        setSaveStatus('saving');
 
         try {
             const body = JSON.stringify({
@@ -210,20 +228,24 @@ export function startSnakeGame(root) {
             const data = await response.json();
 
             if (!response.ok) {
-                const firstError = data.errors ? Object.values(data.errors)[0][0] : null;
-                elements.saveStatus.textContent =
-                    response.status === 429 ? 'Too many saves. Wait a minute and try again.' : (firstError ?? 'Could not save your score.');
+                const isNameProblem = Boolean(data.errors?.player_name);
+                setSaveStatus(response.status === 429 ? 'tooManySaves' : isNameProblem ? 'nameInvalid' : 'saveFailed');
                 elements.saveButton.disabled = false;
                 return;
             }
 
-            elements.saveStatus.textContent = `Saved! You are #${data.rank} on the leaderboard.`;
+            setSaveStatus('saved', { rank: data.rank });
             renderLeaderboard(data.leaderboard);
             elements.saveButton.blur();
         } catch {
-            elements.saveStatus.textContent = 'Could not reach the server. Try again.';
+            setSaveStatus('noServer');
             elements.saveButton.disabled = false;
         }
+    }
+
+    function setSaveStatus(key, params = {}) {
+        saveStatus = key ? { key, params } : null;
+        elements.saveStatus.textContent = saveStatus ? t(key, params) : '';
     }
 
     function postScore(body) {
@@ -268,6 +290,59 @@ export function startSnakeGame(root) {
         elements.length.textContent = getPlayer(world).body.length;
         elements.best.textContent = Math.max(best, world.points);
         elements.bots.textContent = `${world.snakes.filter((snake) => !snake.isPlayer && snake.alive).length}/${BOTS.length}`;
+        renderPowerUps(state === 'over' ? [] : activePowerUps(world));
+    }
+
+    /**
+     * One chip per running power-up, with a bar showing the time left.
+     */
+    function renderPowerUps(powerUps) {
+        elements.powerUps.replaceChildren(
+            ...powerUps.map((powerUp) => {
+                const chip = elements.powerUpChip.content.cloneNode(true);
+                chip.querySelector('[data-emoji]').textContent = powerUp.emoji;
+                chip.querySelector('[data-label]').textContent = t(`powerUp.${powerUp.type}`);
+                const bar = chip.querySelector('[data-bar]');
+                bar.style.width = `${Math.max(0, (powerUp.remainingMs / powerUp.durationMs) * 100)}%`;
+                bar.style.backgroundColor = powerUp.color;
+                return chip;
+            }),
+        );
+    }
+
+    /**
+     * Switch every text on the page to the chosen language, including what the game is showing right now.
+     */
+    function setLanguage(code) {
+        language = code;
+        t = translator(code);
+        storage.set('snake.lang', code);
+        applyLanguage();
+    }
+
+    function applyLanguage() {
+        document.documentElement.lang = language;
+        root.querySelectorAll('[data-i18n]').forEach((element) => {
+            element.textContent = t(element.dataset.i18n);
+        });
+        root.querySelectorAll('[data-i18n-placeholder]').forEach((element) => {
+            element.placeholder = t(element.dataset.i18nPlaceholder);
+        });
+        root.querySelectorAll('[data-i18n-aria-label]').forEach((element) => {
+            element.setAttribute('aria-label', t(element.dataset.i18nAriaLabel));
+        });
+        elements.languageButtons.forEach((button) => {
+            button.setAttribute('aria-pressed', String(button.dataset.language === language));
+        });
+
+        updateSoundToggle();
+        updateHud();
+        if (saveStatus) {
+            setSaveStatus(saveStatus.key, saveStatus.params);
+        }
+        if (state === 'over') {
+            elements.deathCause.textContent = describePlayerCrash(t, world.deathCause);
+        }
     }
 
     function showOverlay(name) {
@@ -290,7 +365,7 @@ export function startSnakeGame(root) {
     }
 
     function updateSoundToggle() {
-        elements.soundToggle.textContent = sound.muted ? '🔇 Sound off' : '🔊 Sound on';
+        elements.soundToggle.textContent = sound.muted ? t('soundOff') : t('soundOn');
         elements.soundToggle.setAttribute('aria-pressed', String(!sound.muted));
     }
 
@@ -366,6 +441,12 @@ export function startSnakeGame(root) {
         toggleSound();
         elements.soundToggle.blur();
     });
+    elements.languageButtons.forEach((button) => {
+        button.addEventListener('click', () => {
+            setLanguage(button.dataset.language);
+            button.blur();
+        });
+    });
     document.addEventListener('visibilitychange', () => {
         if (document.hidden) {
             setPaused(true);
@@ -373,24 +454,4 @@ export function startSnakeGame(root) {
     });
 
     requestAnimationFrame(frame);
-}
-
-function describePlayerCrash(cause) {
-    if (cause.type === 'wall') {
-        return 'You hit the wall.';
-    }
-    if (cause.type === 'headOn') {
-        return `Head-on crash with ${cause.other.name}!`;
-    }
-    return `You ran into ${cause.other.name}.`;
-}
-
-function describeBotCrash(bot, cause) {
-    if (cause.type === 'wall') {
-        return `${bot.name} hit the wall`;
-    }
-    if (cause.type === 'headOn') {
-        return `${bot.name} crashed head-on with ${cause.other.isPlayer ? 'you' : cause.other.name}`;
-    }
-    return `${bot.name} ran into ${cause.other.isPlayer ? 'you!' : cause.other.name}`;
 }

@@ -18,6 +18,25 @@ export const FRUIT_SPAWN_MIN_MS = 1500;
 export const FRUIT_SPAWN_MAX_MS = 3500;
 export const DROP_LIFETIME_MS = 15000;
 
+/**
+ * Rare pickups only the player can collect. Each lasts `durationMs` once picked up.
+ * Shield: survive one crash. Magnet: nearby food drifts toward you.
+ * Slow-mo: the whole game slows down. Ghost: pass through other snakes.
+ */
+export const POWER_UPS = [
+    { type: 'shield', emoji: '🛡️', label: 'Shield', color: '#38bdf8', durationMs: 12000, weight: 3 },
+    { type: 'magnet', emoji: '🧲', label: 'Magnet', color: '#f472b6', durationMs: 9000, weight: 3 },
+    { type: 'slow', emoji: '⏳', label: 'Slow-mo', color: '#c4b5fd', durationMs: 7000, weight: 2 },
+    { type: 'ghost', emoji: '👻', label: 'Ghost', color: '#e2e8f0', durationMs: 7000, weight: 2 },
+];
+export const POWER_UP_SPAWN_MIN_MS = 9000;
+export const POWER_UP_SPAWN_MAX_MS = 16000;
+export const POWER_UP_LIFETIME_MS = 10000;
+export const MAGNET_RADIUS = 6;
+export const SLOW_MO_FACTOR = 1.6;
+/** After a shield breaks, the player can't crash into snakes for a moment so it can get clear. */
+export const SHIELD_GRACE_MS = 1500;
+
 export const START_TICK_MS = 260;
 export const MIN_TICK_MS = 160;
 export const TICK_MS_PER_SEGMENT = 0.7;

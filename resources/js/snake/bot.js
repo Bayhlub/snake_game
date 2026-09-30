@@ -60,6 +60,9 @@ function pickTarget(world, head) {
     let bestDistance = Infinity;
 
     for (const food of world.foods) {
+        if (food.kind === 'power') {
+            continue;
+        }
         const distance = Math.abs(food.x - head.x) + Math.abs(food.y - head.y) - (food.kind === 'fruit' ? 6 : 0);
         if (distance < bestDistance) {
             bestDistance = distance;
