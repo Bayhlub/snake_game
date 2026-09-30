@@ -1,0 +1,40 @@
+{
+  "expo": {
+    "name": "Snake",
+    "slug": "snake",
+    "version": "1.0.0",
+    "orientation": "default",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#07100c",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.snakegame.mobile"
+    },
+    "android": {
+      "package": "com.snakegame.mobile",
+      "adaptiveIcon": {
+        "backgroundColor": "#07100c",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      }
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-audio",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#07100c",
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 200
+        }
+      ],
+      "expo-font",
+      "expo-asset"
+    ]
+  }
+}
