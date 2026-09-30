@@ -94,4 +94,27 @@ class ScoreTest extends TestCase
         $this->postJson(route('scores.store'), ['player_name' => 'Bai', 'points' => 99, 'length' => 5])
             ->assertTooManyRequests();
     }
+
+    public function test_mobile_app_can_save_a_score_and_read_the_leaderboard_through_the_api(): void
+    {
+        Score::factory()->create(['player_name' => 'Noy', 'points' => 50]);
+
+        $this->postJson(route('api.scores.store'), ['player_name' => 'Phone', 'points' => 20, 'length' => 9])
+            ->assertCreated()
+            ->assertJsonPath('rank', 2);
+
+        $this->getJson(route('api.scores.index'))
+            ->assertOk()
+            ->assertJsonPath('leaderboard.0.player_name', 'Noy')
+            ->assertJsonPath('leaderboard.1.player_name', 'Phone');
+    }
+
+    public function test_api_routes_skip_the_browser_session_and_csrf_check(): void
+    {
+        $middleware = app('router')->getRoutes()->getByName('api.scores.store')->gatherMiddleware();
+
+        $this->assertContains('api', $middleware);
+        $this->assertNotContains('web', $middleware);
+        $this->assertContains('throttle:10,1', $middleware);
+    }
 }
