@@ -15,7 +15,7 @@ export async function fetchLeaderboard() {
 }
 
 /**
- * Save a finished game. Resolves to { rank, leaderboard } or { error } with a message for the player.
+ * Save a finished game. Resolves to { rank, leaderboard }, or { error } holding a translation key.
  */
 export async function saveScore({ name, points, length }) {
     let response;
@@ -26,16 +26,15 @@ export async function saveScore({ name, points, length }) {
             body: JSON.stringify({ player_name: name, points, length }),
         });
     } catch {
-        return { error: 'Could not reach the server. Try again.' };
+        return { error: 'noServer' };
     }
 
     if (response.status === 429) {
-        return { error: 'Too many saves. Wait a minute and try again.' };
+        return { error: 'tooManySaves' };
     }
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
-        const firstError = data.errors ? Object.values(data.errors)[0][0] : null;
-        return { error: firstError ?? 'Could not save your score.' };
+        return { error: data.errors?.player_name ? 'nameInvalid' : 'saveFailed' };
     }
     return { rank: data.rank, leaderboard: data.leaderboard };
 }

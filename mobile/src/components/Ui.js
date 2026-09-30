@@ -32,6 +32,32 @@ export function Button({ label, onPress, variant = 'primary', size = 'medium', d
     );
 }
 
+/**
+ * A two-way pill (EN | ລາວ) for picking the language; the chosen side is filled.
+ */
+export function LanguageSwitch({ languages, value, onChange, label }) {
+    return (
+        <View style={styles.switch} accessibilityRole="radiogroup" accessibilityLabel={label}>
+            {languages.map((language) => {
+                const selected = language.code === value;
+                return (
+                    <Pressable
+                        key={language.code}
+                        onPress={() => onChange(language.code)}
+                        accessibilityRole="radio"
+                        accessibilityState={{ selected }}
+                        accessibilityLabel={language.name}
+                        hitSlop={4}
+                        style={[styles.switchOption, selected && styles.switchSelected]}
+                    >
+                        <Text style={[styles.switchText, selected && styles.switchTextSelected]}>{language.label}</Text>
+                    </Pressable>
+                );
+            })}
+        </View>
+    );
+}
+
 export function Panel({ children, style }) {
     return <View style={[styles.panel, style]}>{children}</View>;
 }
@@ -50,6 +76,18 @@ const styles = StyleSheet.create({
     buttonText: { fontFamily: fonts.bold, fontSize: 16 },
     buttonTextLarge: { fontSize: 18 },
     buttonTextSmall: { fontFamily: fonts.medium, fontSize: 13 },
+    switch: {
+        flexDirection: 'row',
+        padding: 3,
+        borderRadius: 999,
+        backgroundColor: 'rgba(255, 255, 255, 0.06)',
+        borderWidth: 1,
+        borderColor: colors.ring,
+    },
+    switchOption: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999 },
+    switchSelected: { backgroundColor: colors.emerald },
+    switchText: { fontFamily: fonts.semibold, fontSize: 13, color: 'rgba(209, 250, 229, 0.8)' },
+    switchTextSelected: { color: colors.emeraldDark },
     panel: {
         borderRadius: 16,
         backgroundColor: colors.panel,

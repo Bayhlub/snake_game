@@ -13,7 +13,7 @@ const PAD = [
 /**
  * Arrow buttons for players who prefer tapping to dragging.
  */
-export function DirectionPad({ onTurn, size = 56 }) {
+export function DirectionPad({ t, onTurn, size = 56 }) {
     const gap = 8;
     return (
         <View style={{ width: size * 3 + gap * 2, height: size * 2 + gap, alignSelf: 'center' }}>
@@ -21,7 +21,7 @@ export function DirectionPad({ onTurn, size = 56 }) {
                 <PadKey
                     key={direction}
                     label={label}
-                    name={direction[0].toUpperCase() + direction.slice(1)}
+                    name={t(direction)}
                     onDown={() => onTurn(direction)}
                     style={{ width: size, height: size, left: col * (size + gap), top: row * (size + gap) }}
                 />
@@ -56,12 +56,12 @@ function PadKey({ label, name, onDown, style }) {
     );
 }
 
-export function Hud({ points, length, best, bots }) {
+export function Hud({ t, points, length, best, bots }) {
     const stats = [
-        ['Score', '⭐', points, colors.amberLight],
-        ['Length', '📏', length, colors.mint],
-        ['Best', '🏆', best, colors.roseLight],
-        ['Snakes', '🐍', bots, colors.sky],
+        [t('score'), '⭐', points, colors.amberLight],
+        [t('length'), '📏', length, colors.mint],
+        [t('best'), '🏆', best, colors.roseLight],
+        [t('snakes'), '🐍', bots, colors.sky],
     ];
     return (
         <View style={styles.hud}>
@@ -77,7 +77,51 @@ export function Hud({ points, length, best, bots }) {
     );
 }
 
+/**
+ * One chip per running power-up, in the board's corner, with a bar showing the time left.
+ */
+export function PowerUpChips({ t, powerUps }) {
+    if (!powerUps.length) {
+        return null;
+    }
+    return (
+        <View style={styles.chips} accessibilityLabel={powerUps.map((p) => t(`powerUp.${p.type}`)).join(', ')}>
+            {powerUps.map((powerUp) => (
+                <View key={powerUp.type} style={styles.chip}>
+                    <Text style={styles.chipEmoji}>{powerUp.emoji}</Text>
+                    <Text style={styles.chipLabel}>{t(`powerUp.${powerUp.type}`)}</Text>
+                    <View style={styles.chipTrack}>
+                        <View
+                            style={[
+                                styles.chipBar,
+                                { width: `${Math.max(0, (powerUp.remainingMs / powerUp.durationMs) * 100)}%`, backgroundColor: powerUp.color },
+                            ]}
+                        />
+                    </View>
+                </View>
+            ))}
+        </View>
+    );
+}
+
 const styles = StyleSheet.create({
+    chips: { position: 'absolute', left: 6, bottom: 6, flexDirection: 'row', flexWrap: 'wrap', gap: 5, pointerEvents: 'none' },
+    chip: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+        borderRadius: 999,
+        paddingLeft: 5,
+        paddingRight: 8,
+        paddingVertical: 2,
+        backgroundColor: 'rgba(0, 0, 0, 0.55)',
+        borderWidth: 1,
+        borderColor: 'rgba(255, 255, 255, 0.15)',
+    },
+    chipEmoji: { fontSize: 11 },
+    chipLabel: { fontFamily: fonts.semibold, fontSize: 11, color: colors.text },
+    chipTrack: { width: 26, height: 5, borderRadius: 999, overflow: 'hidden', backgroundColor: 'rgba(255, 255, 255, 0.15)' },
+    chipBar: { height: '100%', borderRadius: 999 },
     key: {
         position: 'absolute',
         borderRadius: 14,

@@ -6,10 +6,15 @@ import { COLS, ROWS } from '../game/shared';
 import { colors } from '../theme';
 
 /**
- * The game board. It redraws every animation frame and steers the snake toward the finger
- * while it is touching the board.
+ * The game board. It redraws every animation frame and, while `steerable` (a game is running),
+ * steers the snake toward the finger touching it.
+ *
+ * It only claims touches that start on the board itself. Claiming on move as well would steal a
+ * slightly wobbly tap from the Start / Resume / Play again buttons on top of it and cancel the press.
+ * It also always lets go when another control asks: if a finger's "lift" ever went missing
+ * (the snake dying mid-drag), refusing would leave every button on screen dead.
  */
-export function Board({ game, width, children }) {
+export function Board({ game, width, label, steerable, children }) {
     const height = (width * ROWS) / COLS;
     const [picture, setPicture] = useState(null);
 
@@ -29,18 +34,24 @@ export function Board({ game, width, children }) {
     });
     const release = () => game.steerTo(null);
 
+    // Stop steering as soon as the game stops, even if the finger is still down.
+    useEffect(() => {
+        if (!steerable) {
+            game.steerTo(null);
+        }
+    }, [game, steerable]);
+
     return (
         <View style={styles.frame}>
             <View
                 style={[styles.board, { width, height }]}
-                onStartShouldSetResponder={() => true}
-                onMoveShouldSetResponder={() => true}
-                onResponderTerminationRequest={() => false}
-                onResponderGrant={(event) => game.steerTo(toCell(event))}
-                onResponderMove={(event) => game.steerTo(toCell(event))}
+                onStartShouldSetResponder={() => steerable}
+                onResponderTerminationRequest={() => true}
+                onResponderGrant={(event) => steerable && game.steerTo(toCell(event))}
+                onResponderMove={(event) => steerable && game.steerTo(toCell(event))}
                 onResponderRelease={release}
                 onResponderTerminate={release}
-                accessibilityLabel="Snake game board. Touch and drag to steer."
+                accessibilityLabel={label}
             >
                 <View style={[StyleSheet.absoluteFill, styles.passThrough]}>
                     {picture && (

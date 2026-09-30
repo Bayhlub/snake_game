@@ -7,6 +7,9 @@ const SOURCES = {
     fruit: require('../../assets/sounds/fruit.wav'),
     botDied: require('../../assets/sounds/bot-died.wav'),
     playerDied: require('../../assets/sounds/player-died.wav'),
+    powerUp: require('../../assets/sounds/power-up.wav'),
+    shieldBroke: require('../../assets/sounds/shield-broke.wav'),
+    powerUpEnded: require('../../assets/sounds/power-up-ended.wav'),
 };
 
 /**
@@ -48,6 +51,15 @@ export function createSound(isMuted) {
             play('playerDied');
             buzz(() => Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error));
         },
+        powerUp: () => {
+            play('powerUp');
+            buzz(() => Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success));
+        },
+        shieldBroke: () => {
+            play('shieldBroke');
+            buzz(() => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy));
+        },
+        powerUpEnded: () => play('powerUpEnded'),
         get muted() {
             return muted;
         },

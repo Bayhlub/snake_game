@@ -2,24 +2,33 @@ import { Fredoka_400Regular, Fredoka_500Medium, Fredoka_600SemiBold, Fredoka_700
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { fetchLeaderboard, hasServer, saveScore } from './src/api';
+import { loadLocalScores, saveLocalScore } from './src/localScores';
 import { Board } from './src/components/Board';
-import { DirectionPad, Hud } from './src/components/Controls';
+import { DirectionPad, Hud, PowerUpChips } from './src/components/Controls';
 import { Leaderboard } from './src/components/Leaderboard';
 import { GameOverOverlay, PauseOverlay, StartOverlay } from './src/components/Overlays';
-import { Button } from './src/components/Ui';
+import { Button, LanguageSwitch } from './src/components/Ui';
 import { createGame } from './src/game/controller';
-import { COLS, ROWS } from './src/game/shared';
+import { COLS, LANGUAGES, ROWS, pickLanguage, translator } from './src/game/shared';
 import { createSound } from './src/game/sound';
 import { colors, fonts } from './src/theme';
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
-const STORAGE_KEYS = { best: 'snake.best', muted: 'snake.muted', name: 'snake.name' };
+const STORAGE_KEYS = { best: 'snake.best', muted: 'snake.muted', name: 'snake.name', language: 'snake.lang' };
+
+function deviceLanguages() {
+    try {
+        return [Intl.DateTimeFormat().resolvedOptions().locale];
+    } catch {
+        return [];
+    }
+}
 
 export default function App() {
     const [fontsLoaded] = useFonts({ Fredoka_400Regular, Fredoka_500Medium, Fredoka_600SemiBold, Fredoka_700Bold });
@@ -34,6 +43,7 @@ export default function App() {
                     best: Number(values[STORAGE_KEYS.best]) || 0,
                     muted: values[STORAGE_KEYS.muted] === '1',
                     name: values[STORAGE_KEYS.name] ?? '',
+                    language: pickLanguage(values[STORAGE_KEYS.language], deviceLanguages()),
                 }),
             );
     }, []);
@@ -60,10 +70,15 @@ function GameScreen({ saved }) {
     const [message, setMessage] = useState('');
     const [muted, setMuted] = useState(saved.muted);
     const [name, setName] = useState(saved.name);
-    const [saveStatus, setSaveStatus] = useState('');
+    const [language, setLanguage] = useState(saved.language);
+    const t = useMemo(() => translator(language), [language]);
+    const translateRef = useRef(t);
+    translateRef.current = t;
+    /** The save form's status as a translation key, so it follows a language switch. */
+    const [saveStatus, setSaveStatus] = useState(null);
     const [saving, setSaving] = useState(false);
     const [scores, setScores] = useState([]);
-    const [boardState, setBoardState] = useState(hasServer ? 'loading' : 'offline');
+    const [boardState, setBoardState] = useState(hasServer ? 'loading' : 'local');
     const messageTimer = useRef(null);
     const gameRef = useRef(null);
     const soundRef = useRef(null);
@@ -72,6 +87,7 @@ function GameScreen({ saved }) {
         soundRef.current = createSound(saved.muted);
         gameRef.current = createGame({
             sound: soundRef.current,
+            translate: () => translateRef.current,
             best: saved.best,
             onChange: setHud,
             onMessage: (text) => {
@@ -87,6 +103,7 @@ function GameScreen({ saved }) {
 
     const loadLeaderboard = useCallback(() => {
         if (!hasServer) {
+            loadLocalScores().then(setScores);
             return;
         }
         setBoardState('loading');
@@ -113,9 +130,14 @@ function GameScreen({ saved }) {
     }, [game, loadLeaderboard]);
 
     const start = () => {
-        setSaveStatus('');
+        setSaveStatus(null);
         setSaving(false);
         game.start();
+    };
+
+    const changeLanguage = (code) => {
+        setLanguage(code);
+        AsyncStorage.setItem(STORAGE_KEYS.language, code).catch(() => {});
     };
 
     const toggleSound = () => {
@@ -127,21 +149,22 @@ function GameScreen({ saved }) {
     const submitScore = async () => {
         const trimmed = name.trim();
         if (!trimmed) {
-            setSaveStatus('Please type your name first.');
+            setSaveStatus({ key: 'typeName' });
             return;
         }
         AsyncStorage.setItem(STORAGE_KEYS.name, trimmed).catch(() => {});
         setSaving(true);
-        setSaveStatus('Saving…');
-        const response = await saveScore({ name: trimmed, points: state.result.points, length: state.result.length });
+        setSaveStatus({ key: 'saving' });
+        const entry = { name: trimmed, points: state.result.points, length: state.result.length };
+        const response = hasServer ? await saveScore(entry) : await saveLocalScore(entry);
         if (response.error) {
-            setSaveStatus(response.error);
+            setSaveStatus({ key: response.error });
             setSaving(false);
             return;
         }
-        setSaveStatus(`Saved! You are #${response.rank} on the leaderboard.`);
+        setSaveStatus({ key: 'saved', params: { rank: response.rank } });
         setScores(response.leaderboard);
-        setBoardState('ready');
+        setBoardState(hasServer ? 'ready' : 'local');
     };
 
     const isLandscape = width > height;
@@ -152,21 +175,22 @@ function GameScreen({ saved }) {
 
     const board = (
         <View>
-            <Board game={game} width={boardWidth}>
-                {state.status === 'ready' && <StartOverlay onStart={start} />}
-                {state.status === 'paused' && <PauseOverlay onResume={game.resume} />}
+            <Board game={game} width={boardWidth} label={t('boardLabel')} steerable={state.status === 'playing'}>
+                {state.status === 'ready' && <StartOverlay t={t} onStart={start} />}
+                {state.status === 'paused' && <PauseOverlay t={t} onResume={game.resume} />}
                 {state.status === 'over' && (
                     <GameOverOverlay
+                        t={t}
                         result={state.result}
-                        canSave={hasServer}
                         name={name}
                         onChangeName={setName}
                         onSave={submitScore}
                         saving={saving}
-                        saveStatus={saveStatus}
+                        saveStatus={saveStatus ? t(saveStatus.key, saveStatus.params) : ''}
                         onPlayAgain={start}
                     />
                 )}
+                <PowerUpChips t={t} powerUps={state.powerUps} />
                 {message !== '' && (
                     <View style={styles.messageWrap}>
                         <Text style={styles.message} accessibilityLiveRegion="polite">
@@ -182,18 +206,19 @@ function GameScreen({ saved }) {
         <View style={styles.header}>
             <View style={styles.titleRow}>
                 <Text style={styles.titleEmoji}>🐍</Text>
-                <Text style={styles.title}>Snake</Text>
+                <Text style={styles.title}>{t('title')}</Text>
             </View>
             <View style={styles.headerButtons}>
-                {state.status === 'playing' && <Button label="⏸ Pause" variant="ghost" size="small" onPress={game.pause} />}
-                <Button label={muted ? '🔇 Sound off' : '🔊 Sound on'} variant="ghost" size="small" onPress={toggleSound} />
+                <LanguageSwitch languages={LANGUAGES} value={language} onChange={changeLanguage} label={t('language')} />
+                {state.status === 'playing' && <Button label={t('pause')} variant="ghost" size="small" onPress={game.pause} />}
+                <Button label={muted ? t('soundOff') : t('soundOn')} variant="ghost" size="small" onPress={toggleSound} />
             </View>
         </View>
     );
 
-    const hint = <Text style={styles.hint}>👆 Touch and drag on the board. The snake follows your finger. Or use the buttons.</Text>;
-    const hudRow = <Hud points={state.points} length={state.length} best={state.best} bots={state.bots} />;
-    const leaderboard = <Leaderboard scores={scores} state={boardState} onRetry={loadLeaderboard} />;
+    const hint = <Text style={styles.hint}>{t('steerTouch')}</Text>;
+    const hudRow = <Hud t={t} points={state.points} length={state.length} best={state.best} bots={state.bots} />;
+    const leaderboard = <Leaderboard t={t} scores={scores} state={boardState} onRetry={loadLeaderboard} />;
     const padding = {
         paddingTop: insets.top + 8,
         paddingBottom: insets.bottom + 8,
@@ -211,7 +236,7 @@ function GameScreen({ saved }) {
                     </View>
                     <ScrollView style={styles.side} contentContainerStyle={styles.column} keyboardShouldPersistTaps="handled">
                         {header}
-                        <DirectionPad onTurn={game.queueTurn} size={48} />
+                        <DirectionPad t={t} onTurn={game.queueTurn} size={48} />
                         {leaderboard}
                     </ScrollView>
                 </View>
@@ -220,7 +245,7 @@ function GameScreen({ saved }) {
                     {header}
                     {hudRow}
                     {board}
-                    <DirectionPad onTurn={game.queueTurn} />
+                    <DirectionPad t={t} onTurn={game.queueTurn} />
                     <ScrollView style={styles.side} contentContainerStyle={styles.column} keyboardShouldPersistTaps="handled">
                         {hint}
                         {leaderboard}

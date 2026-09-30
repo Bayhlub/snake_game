@@ -1,5 +1,16 @@
 import { createRenderer } from './renderer';
-import { BOTS, DIRECTIONS, createWorld, directionToward, getPlayer, isReverse, step, tickDuration } from './shared';
+import {
+    BOTS,
+    DIRECTIONS,
+    activePowerUps,
+    createWorld,
+    describeBotCrash,
+    directionToward,
+    getPlayer,
+    isReverse,
+    step,
+    tickDuration,
+} from './shared';
 
 const MAX_QUEUED_TURNS = 3;
 
@@ -7,9 +18,12 @@ const MAX_QUEUED_TURNS = 3;
  * The game loop and controls from resources/js/snake/main.js, without the DOM.
  * The screen calls frame() on every animation frame and gets back a Skia picture to show;
  * onChange reports the HUD and game state whenever they change.
+ * `translate()` returns the current language's translate function, so messages follow a language switch.
  */
-export function createGame({ sound, best: initialBest = 0, onChange, onMessage, onNewBest }) {
-    const renderer = createRenderer();
+export function createGame({ sound, translate, best: initialBest = 0, onChange, onMessage, onNewBest }) {
+    const t = (key, params) => translate()(key, params);
+    const powerUpName = (powerUp) => t(`powerUp.${powerUp.type}`);
+    const renderer = createRenderer({ label: powerUpName });
     let world = createWorld();
     let status = 'ready';
     let turnQueue = [];
@@ -27,6 +41,7 @@ export function createGame({ sound, best: initialBest = 0, onChange, onMessage, 
             length: player.body.length,
             best: Math.max(best, world.points),
             bots: `${world.snakes.filter((snake) => !snake.isPlayer && snake.alive).length}/${BOTS.length}`,
+            powerUps: status === 'over' ? [] : activePowerUps(world),
             result,
         };
     }
@@ -81,9 +96,18 @@ export function createGame({ sound, best: initialBest = 0, onChange, onMessage, 
                 sound.fruit();
             } else if (event.type === 'botDied') {
                 sound.botDied();
-                onMessage(describeBotCrash(event.snake, event.cause));
+                onMessage(describeBotCrash(translate(), event.snake, event.cause));
             } else if (event.type === 'playerDied') {
                 sound.playerDied();
+            } else if (event.type === 'powerUp') {
+                sound.powerUp();
+                onMessage(t('powerUpGot', { emoji: event.powerUp.emoji, label: powerUpName(event.powerUp) }));
+            } else if (event.type === 'shieldBroke') {
+                sound.shieldBroke();
+                onMessage(t('shieldSaved'));
+            } else if (event.type === 'powerUpEnded') {
+                sound.powerUpEnded();
+                onMessage(t('powerUpEnded', { label: powerUpName(event.powerUp) }));
             }
         }
     }
@@ -96,7 +120,7 @@ export function createGame({ sound, best: initialBest = 0, onChange, onMessage, 
             onNewBest(best);
         }
         result = {
-            cause: describePlayerCrash(world.deathCause),
+            cause: world.deathCause,
             points: world.points,
             length: getPlayer(world).body.length,
             isNewBest,
@@ -141,24 +165,4 @@ export function createGame({ sound, best: initialBest = 0, onChange, onMessage, 
 
         snapshot,
     };
-}
-
-function describePlayerCrash(cause) {
-    if (cause.type === 'wall') {
-        return 'You hit the wall.';
-    }
-    if (cause.type === 'headOn') {
-        return `Head-on crash with ${cause.other.name}!`;
-    }
-    return `You ran into ${cause.other.name}.`;
-}
-
-function describeBotCrash(bot, cause) {
-    if (cause.type === 'wall') {
-        return `${bot.name} hit the wall`;
-    }
-    if (cause.type === 'headOn') {
-        return `${bot.name} crashed head-on with ${cause.other.isPlayer ? 'you' : cause.other.name}`;
-    }
-    return `${bot.name} ran into ${cause.other.isPlayer ? 'you!' : cause.other.name}`;
 }

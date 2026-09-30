@@ -54,6 +54,12 @@ const sounds = {
     fruit: [660, 880, 1175].map((frequency, i) => ({ frequency, delay: i * 0.07, duration: 0.09 })),
     'bot-died': [{ frequency: 220, duration: 0.15, type: 'triangle', volume: 0.08, endFrequency: 110 }],
     'player-died': [{ frequency: 330, duration: 0.6, type: 'sawtooth', volume: 0.06, endFrequency: 55 }],
+    'power-up': [523, 659, 784, 1047].map((frequency, i) => ({ frequency, delay: i * 0.06, duration: 0.12, type: 'triangle', volume: 0.07 })),
+    'shield-broke': [
+        { frequency: 1200, duration: 0.25, volume: 0.05, endFrequency: 300 },
+        { frequency: 600, delay: 0.05, duration: 0.3, type: 'triangle', volume: 0.06, endFrequency: 150 },
+    ],
+    'power-up-ended': [{ frequency: 660, duration: 0.18, type: 'triangle', volume: 0.05, endFrequency: 330 }],
 };
 
 const dir = new URL('../assets/sounds/', import.meta.url);

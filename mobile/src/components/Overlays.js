@@ -1,5 +1,6 @@
 import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
+import { describePlayerCrash } from '../game/shared';
 import { colors, fonts } from '../theme';
 import { Button } from './Ui';
 
@@ -13,53 +14,53 @@ function Overlay({ children, dim = 0.45 }) {
     );
 }
 
-export function StartOverlay({ onStart }) {
+export function StartOverlay({ t, onStart }) {
     return (
         <Overlay>
             <Text style={styles.bigEmoji}>🐍🍎</Text>
-            <Text style={styles.title}>Ready?</Text>
-            <Button label="Start game" size="large" onPress={onStart} />
+            <Text style={styles.title}>{t('ready')}</Text>
+            <Button label={t('startGame')} size="large" onPress={onStart} />
         </Overlay>
     );
 }
 
-export function PauseOverlay({ onResume }) {
+export function PauseOverlay({ t, onResume }) {
     return (
         <Overlay>
-            <Text style={styles.title}>Paused</Text>
-            <Button label="Resume" size="large" onPress={onResume} />
+            <Text style={styles.title}>{t('paused')}</Text>
+            <Button label={t('resume')} size="large" onPress={onResume} />
         </Overlay>
     );
 }
 
-export function GameOverOverlay({ result, canSave, name, onChangeName, onSave, saving, saveStatus, onPlayAgain }) {
+export function GameOverOverlay({ t, result, name, onChangeName, onSave, saving, saveStatus, onPlayAgain }) {
     return (
         <Overlay dim={0.55}>
-            <Text style={[styles.title, styles.gameOver]}>Game over</Text>
-            <Text style={styles.cause}>{result.cause}</Text>
+            <Text style={[styles.title, styles.gameOver]}>{t('gameOver')}</Text>
+            <Text style={styles.cause}>{describePlayerCrash(t, result.cause)}</Text>
             <Text style={styles.score}>
-                Score <Text style={styles.number}>{result.points}</Text>
+                {t('score')} <Text style={styles.number}>{result.points}</Text>
                 <Text style={styles.dot}> · </Text>
-                Length <Text style={styles.number}>{result.length}</Text>
+                {t('length')} <Text style={styles.number}>{result.length}</Text>
             </Text>
-            {result.isNewBest && <Text style={styles.newBest}>🏆 New best score!</Text>}
+            {result.isNewBest && <Text style={styles.newBest}>{t('newBest')}</Text>}
 
-            {canSave && result.points > 0 && (
+            {result.points > 0 && (
                 <View style={styles.form}>
                     <View style={styles.formRow}>
                         <TextInput
                             value={name}
                             onChangeText={onChangeName}
-                            placeholder="Your name"
+                            placeholder={t('yourName')}
                             placeholderTextColor="rgba(209, 250, 229, 0.4)"
                             maxLength={20}
                             autoComplete="nickname"
                             returnKeyType="send"
                             onSubmitEditing={onSave}
                             style={styles.input}
-                            accessibilityLabel="Your name"
+                            accessibilityLabel={t('yourName')}
                         />
-                        <Button label="Save score" variant="gold" onPress={onSave} disabled={saving} />
+                        <Button label={t('saveScore')} variant="gold" onPress={onSave} disabled={saving} />
                     </View>
                     {saveStatus !== '' && (
                         <Text style={styles.status} accessibilityLiveRegion="polite">
@@ -69,7 +70,7 @@ export function GameOverOverlay({ result, canSave, name, onChangeName, onSave, s
                 </View>
             )}
 
-            <Button label="Play again" size="large" onPress={onPlayAgain} />
+            <Button label={t('playAgain')} size="large" onPress={onPlayAgain} />
         </Overlay>
     );
 }
