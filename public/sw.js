@@ -1,6 +1,7 @@
 // Lets the installed app open and play offline.
 // Pages are network-first (fresh leaderboard when online), built assets are cache-first (their names are hashed).
-const CACHE = 'snake-v1';
+// Built files live in /build/assets/ (Laravel) or /assets/ (the Vercel site).
+const CACHE = 'snake-v2';
 const PRECACHE = ['/', '/manifest.json', '/icons/icon-192.png', '/icons/icon-512.png'];
 
 self.addEventListener('install', (event) => {
@@ -13,7 +14,7 @@ async function precache() {
     const cache = await caches.open(CACHE);
     await cache.addAll(PRECACHE);
     const html = await (await cache.match('/')).text();
-    const assets = [...new Set(html.match(/\/build\/[^"'\s)]+/g) ?? [])];
+    const assets = [...new Set(html.match(/\/(?:build\/)?assets\/[^"'\s)]+/g) ?? [])];
     await cache.addAll(assets);
 }
 
@@ -36,7 +37,7 @@ self.addEventListener('fetch', (event) => {
 
     if (request.mode === 'navigate' && url.pathname === '/') {
         event.respondWith(networkFirst(request));
-    } else if (url.pathname.startsWith('/build/') || url.pathname.startsWith('/icons/')) {
+    } else if (/^\/(build\/)?assets\/|^\/icons\//.test(url.pathname)) {
         event.respondWith(cacheFirst(request));
     }
 });

@@ -1,0 +1,5 @@
+/* The Laravel app's styles (colors, fonts, components), plus this page and the game code as Tailwind sources. */
+@import '../../resources/css/app.css';
+
+@source '../index.html';
+@source '../../resources/js';

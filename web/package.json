@@ -1,0 +1,24 @@
+{
+    "name": "snake-web",
+    "private": true,
+    "type": "module",
+    "description": "The Snake game as a static site with a serverless Top 10 API, for deploying to Vercel.",
+    "scripts": {
+        "dev": "vite",
+        "build": "vite build",
+        "preview": "vite preview",
+        "test": "node --test \"tests/*.test.js\""
+    },
+    "engines": {
+        "node": ">=20"
+    },
+    "dependencies": {
+        "@neondatabase/serverless": "^1.2.0"
+    },
+    "devDependencies": {
+        "@electric-sql/pglite": "^0.5.8",
+        "@tailwindcss/vite": "^4.3.3",
+        "tailwindcss": "^4.3.3",
+        "vite": "^8.3.2"
+    }
+}

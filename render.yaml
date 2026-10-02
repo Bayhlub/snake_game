@@ -1,0 +1,15 @@
+# The online game server (multiplayer/server.js) on Render's free plan.
+# In Render: New → Blueprint → pick this repository. It sleeps after 15 minutes without players
+# and takes about a minute to wake when someone joins.
+services:
+  - type: web
+    name: snake-multiplayer
+    runtime: node
+    plan: free
+    region: singapore
+    buildCommand: npm ci --omit=dev
+    startCommand: node multiplayer/server.js
+    healthCheckPath: /
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
