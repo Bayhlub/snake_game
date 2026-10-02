@@ -50,6 +50,7 @@ const MESSAGES = {
         botRanInto: '{bot} ran into {other}',
         you: 'you',
         youExclaim: 'you!',
+        youTag: 'YOU',
 
         powerUpGot: '{emoji} {label}!',
         shieldSaved: '🛡️ Your shield saved you!',
@@ -59,6 +60,20 @@ const MESSAGES = {
         pauseKey: 'pause',
         soundKey: 'sound',
         steerTouch: '👆 Touch and drag on the board. The snake follows your finger. Or use the buttons.',
+
+        playOnline: '🌐 Play online',
+        joinTitle: 'Play online',
+        joinHint: 'Everyone who joins plays on one board, with the computer snakes.',
+        join: 'Join',
+        back: 'Back',
+        leave: 'Leave',
+        connecting: 'Connecting…',
+        wakingUp: 'Waking up the game server… this can take up to a minute.',
+        serverOffline: 'Could not reach the game server. Is it running?',
+        serverFull: 'The game is full. Try again later.',
+        disconnected: 'Lost connection to the online game.',
+        onlineNow: '🌐 Playing now',
+        serverAddress: 'Server address',
 
         topTen: '🏆 Top 10',
         noScores: 'No scores yet. Be the first!',
@@ -89,6 +104,8 @@ const MESSAGES = {
         'name.Grape': 'Grape',
         'name.Sky': 'Sky',
         'name.Rose': 'Rose',
+        'name.Berry': 'Berry',
+        'name.Coco': 'Coco',
 
         up: 'Up',
         down: 'Down',
@@ -139,6 +156,7 @@ const MESSAGES = {
         botRanInto: '{bot} ແລ່ນຕຳ {other}',
         you: 'ທ່ານ',
         youExclaim: 'ທ່ານ!',
+        youTag: 'ທ່ານ',
 
         powerUpGot: '{emoji} {label}!',
         shieldSaved: '🛡️ ໂລ່ປ້ອງກັນຊ່ວຍທ່ານໄວ້!',
@@ -148,6 +166,20 @@ const MESSAGES = {
         pauseKey: 'ຢຸດ',
         soundKey: 'ສຽງ',
         steerTouch: '👆 ແຕະ ແລະ ລາກເທິງກະດານ. ງູຈະຕາມນິ້ວຂອງທ່ານ. ຫຼື ໃຊ້ປຸ່ມກົດ.',
+
+        playOnline: '🌐 ຫຼິ້ນອອນລາຍ',
+        joinTitle: 'ຫຼິ້ນອອນລາຍ',
+        joinHint: 'ທຸກຄົນທີ່ເຂົ້າຮ່ວມ ຫຼິ້ນຢູ່ກະດານດຽວກັນ ພ້ອມກັບງູຄອມພິວເຕີ.',
+        join: 'ເຂົ້າຮ່ວມ',
+        back: 'ກັບຄືນ',
+        leave: 'ອອກ',
+        connecting: 'ກຳລັງເຊື່ອມຕໍ່…',
+        wakingUp: 'ກຳລັງປຸກເຊີບເວີເກມ… ອາດໃຊ້ເວລາເຖິງໜຶ່ງນາທີ.',
+        serverOffline: 'ເຊື່ອມຕໍ່ເຊີບເວີເກມບໍ່ໄດ້. ເປີດເຊີບເວີແລ້ວບໍ?',
+        serverFull: 'ເກມເຕັມແລ້ວ. ກະລຸນາລອງໃໝ່ພາຍຫຼັງ.',
+        disconnected: 'ການເຊື່ອມຕໍ່ເກມອອນລາຍຂາດ.',
+        onlineNow: '🌐 ກຳລັງຫຼິ້ນ',
+        serverAddress: 'ທີ່ຢູ່ເຊີບເວີ',
 
         topTen: '🏆 10 ອັນດັບສູງສຸດ',
         noScores: 'ຍັງບໍ່ມີຄະແນນ. ມາເປັນຄົນທຳອິດເລີຍ!',
@@ -178,6 +210,8 @@ const MESSAGES = {
         'name.Grape': 'ອະງຸ່ນ',
         'name.Sky': 'ຟ້າ',
         'name.Rose': 'ກຸຫຼາບ',
+        'name.Berry': 'ເບີຣີ',
+        'name.Coco': 'ໝາກພ້າວ',
 
         up: 'ຂຶ້ນ',
         down: 'ລົງ',
@@ -207,25 +241,36 @@ export function pickLanguage(saved, deviceLanguages = []) {
 }
 
 /**
+ * A snake's name to show: players (online) by the name they typed, bots by their translated name.
+ */
+function snakeName(t, snake) {
+    if (!snake) {
+        return '?';
+    }
+    return snake.isPlayer ? snake.name : t(`name.${snake.name}`);
+}
+
+/**
  * The crash message shown on the game-over screen.
  */
 export function describePlayerCrash(t, cause) {
     if (cause.type === 'wall') {
         return t('hitWall');
     }
-    return t(cause.type === 'headOn' ? 'headOnWith' : 'ranInto', { name: t(`name.${cause.other.name}`) });
+    return t(cause.type === 'headOn' ? 'headOnWith' : 'ranInto', { name: snakeName(t, cause.other) });
 }
 
 /**
- * The short message when a computer snake crashes.
+ * The short message when another snake crashes. `me` is the player on this device (solo: the player).
  */
-export function describeBotCrash(t, bot, cause) {
-    const name = t(`name.${bot.name}`);
+export function describeBotCrash(t, snake, cause, me = null) {
+    const name = snakeName(t, snake);
+    const isMe = (other) => other && (me ? other === me : other.isPlayer);
     if (cause.type === 'wall') {
         return t('botHitWall', { bot: name });
     }
     if (cause.type === 'headOn') {
-        return t('botHeadOn', { bot: name, other: cause.other.isPlayer ? t('you') : t(`name.${cause.other.name}`) });
+        return t('botHeadOn', { bot: name, other: isMe(cause.other) ? t('you') : snakeName(t, cause.other) });
     }
-    return t('botRanInto', { bot: name, other: cause.other.isPlayer ? t('youExclaim') : t(`name.${cause.other.name}`) });
+    return t('botRanInto', { bot: name, other: isMe(cause.other) ? t('youExclaim') : snakeName(t, cause.other) });
 }

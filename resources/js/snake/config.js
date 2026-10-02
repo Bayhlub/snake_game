@@ -1,9 +1,11 @@
-export const COLS = 40;
-export const ROWS = 28;
+/** The default (landscape) field. The phone app turns it upright (ROWS × COLS) when held in portrait. */
+export const COLS = 56;
+export const ROWS = 40;
 export const CELL = 20;
 
 export const START_LENGTH = 4;
-export const FOOD_COUNT = 6;
+/** One piece of food on the board for every this many cells, so bigger fields get more food. */
+export const CELLS_PER_FOOD = 220;
 export const FOOD = { points: 1, grow: 1 };
 
 export const FRUITS = [
@@ -36,10 +38,19 @@ export const MAGNET_RADIUS = 6;
 export const SLOW_MO_FACTOR = 1.6;
 /** After a shield breaks, the player can't crash into snakes for a moment so it can get clear. */
 export const SHIELD_GRACE_MS = 1500;
+/** Online, a player who joins or comes back can't crash into snakes for this long. */
+export const SPAWN_GRACE_MS = 2500;
 
 export const START_TICK_MS = 260;
 export const MIN_TICK_MS = 160;
 export const TICK_MS_PER_SEGMENT = 0.7;
+/** Online, everyone moves at one even pace. */
+export const MULTIPLAYER_TICK_MS = 220;
+
+/** Online play: the game server's port, how many can join, and the colors players get in turn. */
+export const MULTIPLAYER_PORT = 8787;
+export const MAX_PLAYERS = 8;
+export const PLAYER_COLORS = ['#4ade80', '#22d3ee', '#facc15', '#e879f9', '#f8fafc', '#a3e635', '#60a5fa', '#fb7185'];
 
 export const PLAYER = { name: 'You', color: '#4ade80' };
 export const BOTS = [
@@ -47,6 +58,8 @@ export const BOTS = [
     { name: 'Grape', color: '#a78bfa' },
     { name: 'Sky', color: '#38bdf8' },
     { name: 'Rose', color: '#f472b6' },
+    { name: 'Berry', color: '#f87171' },
+    { name: 'Coco', color: '#c9a27a' },
 ];
 export const BOT_RESPAWN_MS = 3000;
 export const BOT_MAX_LENGTH = 30;

@@ -2,7 +2,6 @@ import { Canvas, Picture } from '@shopify/react-native-skia';
 import { useEffect, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
-import { COLS, ROWS } from '../game/shared';
 import { colors } from '../theme';
 
 /**
@@ -14,8 +13,8 @@ import { colors } from '../theme';
  * It also always lets go when another control asks: if a finger's "lift" ever went missing
  * (the snake dying mid-drag), refusing would leave every button on screen dead.
  */
-export function Board({ game, width, label, steerable, children }) {
-    const height = (width * ROWS) / COLS;
+export function Board({ game, width, cols, rows, label, steerable, children }) {
+    const height = (width * rows) / cols;
     const [picture, setPicture] = useState(null);
 
     useEffect(() => {
@@ -29,8 +28,8 @@ export function Board({ game, width, label, steerable, children }) {
     }, [game, width, height]);
 
     const toCell = (event) => ({
-        x: Math.min(COLS - 1, Math.max(0, Math.floor((event.nativeEvent.locationX / width) * COLS))),
-        y: Math.min(ROWS - 1, Math.max(0, Math.floor((event.nativeEvent.locationY / height) * ROWS))),
+        x: Math.min(cols - 1, Math.max(0, Math.floor((event.nativeEvent.locationX / width) * cols))),
+        y: Math.min(rows - 1, Math.max(0, Math.floor((event.nativeEvent.locationY / height) * rows))),
     });
     const release = () => game.steerTo(null);
 

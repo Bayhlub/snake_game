@@ -1,5 +1,6 @@
-import { BOTS, COLS, DIRECTIONS, ROWS } from './config.js';
+import { BOTS, COLS, DIRECTIONS, MULTIPLAYER_PORT, ROWS } from './config.js';
 import { describeBotCrash, describePlayerCrash, pickLanguage, translator } from './i18n.js';
+import { connectOnline } from './online.js';
 import { createRenderer } from './renderer.js';
 import { createSound } from './sound.js';
 import { directionToward } from './steering.js';
@@ -34,6 +35,10 @@ const storage = {
     },
 };
 
+/**
+ * The web game. Solo, the whole game runs here; online, the multiplayer server runs it and this
+ * page draws what the server sends and passes the player's turns back.
+ */
 export function startSnakeGame(root) {
     const $ = (selector) => root.querySelector(selector);
     const elements = {
@@ -45,6 +50,7 @@ export function startSnakeGame(root) {
         message: $('#event-message'),
         overlays: {
             ready: $('#overlay-start'),
+            join: $('#overlay-join'),
             paused: $('#overlay-pause'),
             over: $('#overlay-over'),
         },
@@ -63,12 +69,23 @@ export function startSnakeGame(root) {
         powerUps: $('#power-ups'),
         powerUpChip: $('#power-up-chip'),
         languageButtons: root.querySelectorAll('[data-language]'),
+        joinForm: $('#join-form'),
+        joinName: $('#join-name'),
+        joinButton: $('#join-button'),
+        joinStatus: $('#join-status'),
+        leaveOnline: $('#leave-online'),
+        onlinePanel: $('#online-panel'),
+        onlinePlayers: $('#online-players'),
+        onlinePlayerRow: $('#online-player-row'),
     };
 
     let language = pickLanguage(storage.get('snake.lang'), navigator.languages ?? [navigator.language]);
     let t = translator(language);
 
-    const renderer = createRenderer(elements.canvas, COLS, ROWS, { label: (powerUp) => t(`powerUp.${powerUp.type}`) });
+    const renderer = createRenderer(elements.canvas, COLS, ROWS, {
+        label: (powerUp) => t(`powerUp.${powerUp.type}`),
+        youLabel: () => t('youTag'),
+    });
     const sound = createSound(storage.get('snake.muted') === '1');
 
     let world = createWorld();
@@ -81,14 +98,31 @@ export function startSnakeGame(root) {
     let messageTimer = null;
     /** The save form's status as a translation key, so it can be re-shown in another language. */
     let saveStatus = null;
+    /** The finished game shown on the game-over screen: { points, length, cause }. */
+    let result = null;
+    /** While playing online: { connection, world, lastStateAt }. */
+    let online = null;
+
+    /** The world on screen, and the snake this device controls. */
+    const shownWorld = () => online?.world ?? world;
+    const me = () => (online ? online.world.me() : getPlayer(world));
 
     elements.playerName.value = storage.get('snake.name') ?? '';
-    renderLeaderboard(JSON.parse($('#leaderboard-data').textContent));
+    elements.joinName.value = elements.playerName.value;
+    loadLeaderboard();
     applyLanguage();
     updateHud();
     showOverlay('ready');
 
     function newGame() {
+        if (online) {
+            online.connection.send({ type: 'respawn' });
+            pointerTarget = null;
+            state = 'playing';
+            showOverlay(null);
+            document.activeElement?.blur();
+            return;
+        }
         world = createWorld();
         turnQueue = [];
         pointerTarget = null;
@@ -100,6 +134,9 @@ export function startSnakeGame(root) {
     }
 
     function setPaused(paused) {
+        if (online) {
+            return;
+        }
         if (paused && state === 'playing') {
             state = 'paused';
             showOverlay('paused');
@@ -113,6 +150,12 @@ export function startSnakeGame(root) {
 
     function queueTurn(name) {
         pointerTarget = null;
+        if (online) {
+            if (state === 'playing') {
+                online.connection.send({ type: 'turn', dir: name });
+            }
+            return;
+        }
         if (state === 'ready') {
             newGame();
         }
@@ -132,6 +175,13 @@ export function startSnakeGame(root) {
         const elapsed = Math.min(now - lastFrame, 250);
         lastFrame = now;
 
+        if (online) {
+            const progress = Math.min((now - online.lastStateAt) / online.world.tickMs, 1);
+            renderer.draw(online.world, now, progress, state === 'playing' ? pointerTarget : null);
+            requestAnimationFrame(frame);
+            return;
+        }
+
         if (state === 'playing') {
             accumulated += elapsed;
             let duration = tickDuration(world);
@@ -143,7 +193,8 @@ export function startSnakeGame(root) {
                 updateHud();
 
                 if (world.over) {
-                    gameOver();
+                    const player = getPlayer(world);
+                    gameOver({ points: world.points, length: player.body.length, cause: world.deathCause });
                 }
                 duration = tickDuration(world);
             }
@@ -155,49 +206,158 @@ export function startSnakeGame(root) {
     }
 
     function handleEvents(events, effectDelayMs) {
+        const player = me();
         for (const event of events) {
             renderer.showEvent(event, effectDelayMs);
+            const isMine = event.snake && event.snake === player;
 
-            if (event.type === 'eat' && event.snake.isPlayer) {
+            if (event.type === 'eat' && isMine) {
                 sound.eat();
-            } else if (event.type === 'fruit' && event.snake.isPlayer) {
+            } else if (event.type === 'fruit' && isMine) {
                 sound.fruit();
-            } else if (event.type === 'botDied') {
+            } else if (event.type === 'botDied' || (event.type === 'playerDied' && !isMine)) {
                 sound.botDied();
-                showMessage(describeBotCrash(t, event.snake, event.cause));
+                showMessage(describeBotCrash(t, event.snake, event.cause, player));
             } else if (event.type === 'playerDied') {
                 sound.playerDied();
-            } else if (event.type === 'powerUp') {
+            } else if (event.type === 'powerUp' && isMine) {
                 sound.powerUp();
                 showMessage(t('powerUpGot', { emoji: event.powerUp.emoji, label: t(`powerUp.${event.powerUp.type}`) }));
-            } else if (event.type === 'shieldBroke') {
+            } else if (event.type === 'shieldBroke' && isMine) {
                 sound.shieldBroke();
                 showMessage(t('shieldSaved'));
-            } else if (event.type === 'powerUpEnded') {
+            } else if (event.type === 'powerUpEnded' && isMine) {
                 sound.powerUpEnded();
                 showMessage(t('powerUpEnded', { label: t(`powerUp.${event.powerUp.type}`) }));
             }
         }
     }
 
-    function gameOver() {
+    function gameOver(finished) {
         state = 'over';
-        const player = getPlayer(world);
-        const isNewBest = world.points > best;
+        result = finished;
+        const isNewBest = finished.points > best;
         if (isNewBest) {
-            best = world.points;
+            best = finished.points;
             storage.set('snake.best', String(best));
         }
 
-        elements.deathCause.textContent = describePlayerCrash(t, world.deathCause);
-        elements.finalScore.textContent = world.points;
-        elements.finalLength.textContent = player.body.length;
+        elements.deathCause.textContent = describePlayerCrash(t, finished.cause);
+        elements.finalScore.textContent = finished.points;
+        elements.finalLength.textContent = finished.length;
         elements.newBest.hidden = !isNewBest;
-        elements.saveForm.hidden = world.points === 0;
+        elements.saveForm.hidden = finished.points === 0;
         elements.saveButton.disabled = false;
         setSaveStatus(null);
         updateHud();
         showOverlay('over');
+    }
+
+    /**
+     * Online: join the game server on the computer this page came from.
+     */
+    function joinOnline(event) {
+        event.preventDefault();
+        const name = elements.joinName.value.trim();
+        if (!name) {
+            elements.joinStatus.textContent = t('typeName');
+            elements.joinName.focus();
+            return;
+        }
+        storage.set('snake.name', name);
+        elements.playerName.value = name;
+        elements.joinButton.disabled = true;
+        elements.joinStatus.textContent = t('connecting');
+        // A free hosted server sleeps when nobody plays; say so if waking it takes a while.
+        const slowNotice = setTimeout(() => {
+            if (!online) {
+                elements.joinStatus.textContent = t('wakingUp');
+            }
+        }, 4000);
+
+        const connection = connectOnline(multiplayerUrl(), name, {
+            onJoined(remote) {
+                clearTimeout(slowNotice);
+                online = { connection, world: remote, lastStateAt: performance.now(), lastLength: remote.me().body.length };
+                state = 'playing';
+                pointerTarget = null;
+                elements.joinButton.disabled = false;
+                elements.joinStatus.textContent = '';
+                elements.leaveOnline.hidden = false;
+                elements.onlinePanel.hidden = false;
+                showOverlay(null);
+                document.activeElement?.blur();
+            },
+            onState(remote, events) {
+                online.lastStateAt = performance.now();
+                handleEvents(events, remote.tickMs);
+                const player = remote.me();
+                const myCrash = events.find((e) => e.type === 'playerDied' && e.snake === player);
+                if (myCrash && state === 'playing') {
+                    // The server clears a crashed snake's body, so use its length from the move before.
+                    gameOver({ points: player.points, length: online.lastLength, cause: myCrash.cause });
+                }
+                if (player?.alive) {
+                    online.lastLength = player.body.length;
+                }
+                if (state === 'playing' && pointerTarget && player?.alive) {
+                    const turn = directionToward(player, pointerTarget, remote);
+                    if (turn) {
+                        online.connection.send({ type: 'turn', dir: Object.keys(DIRECTIONS).find((key) => DIRECTIONS[key] === turn) });
+                    }
+                }
+                updateHud();
+                renderOnlinePlayers();
+            },
+            onFailed(reason) {
+                clearTimeout(slowNotice);
+                elements.joinButton.disabled = false;
+                elements.joinStatus.textContent = t(reason === 'full' ? 'serverFull' : 'serverOffline');
+            },
+            onClosed() {
+                leaveOnline();
+                showMessage(t('disconnected'));
+            },
+        });
+    }
+
+    /**
+     * The game server set in the page (`<meta name="multiplayer-url">`, e.g. the hosted one),
+     * otherwise the one running on the computer this page came from.
+     */
+    function multiplayerUrl() {
+        const configured = document.querySelector('meta[name="multiplayer-url"]')?.content?.trim();
+        if (configured && !configured.startsWith('%')) {
+            return configured;
+        }
+        return `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.hostname}:${MULTIPLAYER_PORT}`;
+    }
+
+    function leaveOnline() {
+        online?.connection.leave();
+        online = null;
+        world = createWorld();
+        state = 'ready';
+        result = null;
+        elements.leaveOnline.hidden = true;
+        elements.onlinePanel.hidden = true;
+        updateHud();
+        showOverlay('ready');
+    }
+
+    /** Everyone in the online game, best score first. */
+    function renderOnlinePlayers() {
+        const player = me();
+        const players = online.world.snakes.filter((snake) => snake.isPlayer).sort((a, b) => b.points - a.points);
+        elements.onlinePlayers.replaceChildren(
+            ...players.map((snake) => {
+                const row = elements.onlinePlayerRow.content.cloneNode(true);
+                row.querySelector('[data-dot]').style.backgroundColor = snake.color;
+                row.querySelector('[data-name]').textContent = snake === player ? `${snake.name} (${t('you')})` : snake.name;
+                row.querySelector('[data-points]').textContent = snake.alive ? snake.points : '💥';
+                return row;
+            }),
+        );
     }
 
     async function saveScore(event) {
@@ -214,13 +374,9 @@ export function startSnakeGame(root) {
         setSaveStatus('saving');
 
         try {
-            const body = JSON.stringify({
-                player_name: name,
-                points: world.points,
-                length: getPlayer(world).body.length,
-            });
+            const body = JSON.stringify({ player_name: name, points: result.points, length: Math.max(1, result.length) });
             let response = await postScore(body);
-            if (response.status === 419) {
+            if (response.status === 419 && csrfMeta()) {
                 // The installed app may have opened a cached page whose session token has expired.
                 await refreshCsrfToken();
                 response = await postScore(body);
@@ -248,16 +404,40 @@ export function startSnakeGame(root) {
         elements.saveStatus.textContent = saveStatus ? t(key, params) : '';
     }
 
+    /**
+     * Save a score to the form's endpoint: Laravel's /scores (with its CSRF token) or, on the
+     * static Vercel site, /api/scores (no token needed).
+     */
     function postScore(body) {
         return fetch(elements.saveForm.action, {
             method: 'POST',
             headers: {
                 Accept: 'application/json',
                 'Content-Type': 'application/json',
-                'X-CSRF-TOKEN': csrfMeta().content,
+                ...(csrfMeta() ? { 'X-CSRF-TOKEN': csrfMeta().content } : {}),
             },
             body,
         });
+    }
+
+    /**
+     * Laravel puts the Top 10 in the page; the static site fetches it from its API instead.
+     */
+    async function loadLeaderboard() {
+        const embedded = $('#leaderboard-data');
+        if (embedded) {
+            renderLeaderboard(JSON.parse(embedded.textContent));
+            return;
+        }
+        renderLeaderboard([]);
+        try {
+            const response = await fetch(elements.saveForm.action, { headers: { Accept: 'application/json' } });
+            if (response.ok) {
+                renderLeaderboard((await response.json()).leaderboard);
+            }
+        } catch {
+            // Offline or no server: the list just stays empty.
+        }
     }
 
     async function refreshCsrfToken() {
@@ -286,11 +466,17 @@ export function startSnakeGame(root) {
     }
 
     function updateHud() {
-        elements.score.textContent = world.points;
-        elements.length.textContent = getPlayer(world).body.length;
-        elements.best.textContent = Math.max(best, world.points);
-        elements.bots.textContent = `${world.snakes.filter((snake) => !snake.isPlayer && snake.alive).length}/${BOTS.length}`;
-        renderPowerUps(state === 'over' ? [] : activePowerUps(world));
+        const shown = shownWorld();
+        const player = me();
+        const points = player?.points ?? 0;
+        const others = shown.snakes.filter((snake) => snake !== player);
+        elements.score.textContent = points;
+        elements.length.textContent = player?.body.length ?? 0;
+        elements.best.textContent = Math.max(best, points);
+        elements.bots.textContent = online
+            ? `${others.filter((snake) => snake.alive).length}/${others.length}`
+            : `${others.filter((snake) => snake.alive).length}/${BOTS.length}`;
+        renderPowerUps(state === 'over' || !player ? [] : activePowerUps(shown, player));
     }
 
     /**
@@ -340,8 +526,11 @@ export function startSnakeGame(root) {
         if (saveStatus) {
             setSaveStatus(saveStatus.key, saveStatus.params);
         }
-        if (state === 'over') {
-            elements.deathCause.textContent = describePlayerCrash(t, world.deathCause);
+        if (state === 'over' && result) {
+            elements.deathCause.textContent = describePlayerCrash(t, result.cause);
+        }
+        if (online) {
+            renderOnlinePlayers();
         }
     }
 
@@ -434,6 +623,17 @@ export function startSnakeGame(root) {
     });
 
     $('#start-button').addEventListener('click', newGame);
+    $('#online-button').addEventListener('click', () => {
+        elements.joinStatus.textContent = '';
+        showOverlay('join');
+        elements.joinName.focus();
+    });
+    $('#join-back').addEventListener('click', () => showOverlay('ready'));
+    elements.joinForm.addEventListener('submit', joinOnline);
+    elements.leaveOnline.addEventListener('click', () => {
+        leaveOnline();
+        elements.leaveOnline.blur();
+    });
     $('#resume-button').addEventListener('click', () => setPaused(false));
     $('#play-again-button').addEventListener('click', newGame);
     elements.saveForm.addEventListener('submit', saveScore);

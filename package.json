@@ -5,7 +5,9 @@
     "scripts": {
         "build": "vite build",
         "dev": "vite",
-        "test": "node --test \"tests/js/*.test.js\""
+        "test": "node --test \"tests/js/*.test.js\"",
+        "multiplayer": "node multiplayer/server.js",
+        "multiplayer:friend": "node multiplayer/test-player.js"
     },
     "devDependencies": {
         "@tailwindcss/vite": "^4.0.0",
@@ -16,5 +18,8 @@
     },
     "optionalDependencies": {
         "@laravel/multiplex": "^0.4.1"
+    },
+    "dependencies": {
+        "ws": "^8.22.0"
     }
 }

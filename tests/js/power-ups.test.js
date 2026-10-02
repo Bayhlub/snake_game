@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 
-import { DIRECTIONS, POWER_UPS, SLOW_MO_FACTOR } from '../../resources/js/snake/config.js';
+import { COLS, DIRECTIONS, POWER_UPS, SLOW_MO_FACTOR } from '../../resources/js/snake/config.js';
 import { activePowerUps, createWorld, getPlayer, isEffectActive, step, tickDuration } from '../../resources/js/snake/world.js';
 
 const powerUp = (type) => POWER_UPS.find((p) => p.type === type);
@@ -78,7 +78,7 @@ describe('power-ups', () => {
 
 describe('shield', () => {
     test('without it, hitting the wall ends the game', () => {
-        const world = makeWorld({ x: 39, y: 10 });
+        const world = makeWorld({ x: COLS - 1, y: 10 });
 
         step(world, null, 200);
 
@@ -86,7 +86,7 @@ describe('shield', () => {
     });
 
     test('it takes a wall hit: the player bounces back, turns, and the shield is used up', () => {
-        const world = makeWorld({ x: 39, y: 10 });
+        const world = makeWorld({ x: COLS - 1, y: 10 });
         world.effects.shield = 10000;
 
         const events = step(world, null, 200);
@@ -94,7 +94,7 @@ describe('shield', () => {
 
         assert.equal(world.over, false);
         assert.ok(events.some((event) => event.type === 'shieldBroke'));
-        assert.deepEqual(player.body[0], { x: 39, y: 10 });
+        assert.deepEqual(player.body[0], { x: COLS - 1, y: 10 });
         assert.ok(player.dir === DIRECTIONS.up || player.dir === DIRECTIONS.down);
         assert.equal(isEffectActive(world, 'shield'), false);
 

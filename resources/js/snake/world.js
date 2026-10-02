@@ -4,11 +4,11 @@ import {
     BOT_RESPAWN_MS,
     BOT_SAFE_DISTANCE,
     BOTS,
+    CELLS_PER_FOOD,
     COLS,
     DIRECTIONS,
     DROP_LIFETIME_MS,
     FOOD,
-    FOOD_COUNT,
     FRUIT_LIFETIME_MS,
     FRUIT_SPAWN_MAX_MS,
     FRUIT_SPAWN_MIN_MS,
@@ -16,6 +16,7 @@ import {
     MAGNET_RADIUS,
     MAX_FRUITS,
     MIN_TICK_MS,
+    MULTIPLAYER_TICK_MS,
     PLAYER,
     POWER_UP_LIFETIME_MS,
     POWER_UP_SPAWN_MAX_MS,
@@ -24,43 +25,61 @@ import {
     ROWS,
     SHIELD_GRACE_MS,
     SLOW_MO_FACTOR,
+    SPAWN_GRACE_MS,
     START_LENGTH,
     START_TICK_MS,
     TICK_MS_PER_SEGMENT,
 } from './config.js';
 
 /**
- * Create a fresh game: the player on the left, bots spread around, food on the board.
+ * Create a fresh game: bots spread around and food on the board.
+ * The field is COLS × ROWS unless `cols` and `rows` say otherwise (the phone app turns it upright).
+ *
+ * Solo (the default): one player starts on the left, and the game is over when it crashes.
+ * Multiplayer: players join and leave with addPlayer / removePlayer; a crashed player turns
+ * into food like a bot and waits for respawnPlayer, while the game carries on for everyone else.
  */
-export function createWorld(random = Math.random) {
+export function createWorld(random = Math.random, { cols = COLS, rows = ROWS, multiplayer = false } = {}) {
     const world = {
-        cols: COLS,
-        rows: ROWS,
+        cols,
+        rows,
+        multiplayer,
+        foodCount: Math.max(4, Math.round((cols * rows) / CELLS_PER_FOOD)),
         snakes: [],
         foods: [],
         time: 0,
         nextFruitAt: randomBetween(random, FRUIT_SPAWN_MIN_MS, FRUIT_SPAWN_MAX_MS),
         nextPowerUpAt: randomBetween(random, POWER_UP_SPAWN_MIN_MS, POWER_UP_SPAWN_MAX_MS),
-        /** Power-up type (plus 'grace' after a shield breaks) => game time it lasts until. */
-        effects: {},
-        points: 0,
         over: false,
-        deathCause: null,
         random,
     };
 
-    const player = makeSnake(0, PLAYER, true);
-    const headX = 8;
-    const headY = Math.floor(ROWS / 2);
-    player.dir = DIRECTIONS.right;
-    player.body = Array.from({ length: START_LENGTH }, (_, i) => ({ x: headX - i, y: headY }));
-    player.alive = true;
-    world.snakes.push(player);
+    // Solo shortcuts: the one player's score, power-ups and crash, read straight off the world.
+    Object.defineProperties(world, {
+        points: {
+            get: () => world.snakes[0]?.points ?? 0,
+            set: (value) => {
+                world.snakes[0].points = value;
+            },
+        },
+        effects: { get: () => world.snakes[0]?.effects ?? {} },
+        deathCause: { get: () => world.snakes[0]?.deathCause ?? null },
+    });
 
-    BOTS.forEach((bot, i) => {
-        const snake = makeSnake(i + 1, bot, false);
+    if (!multiplayer) {
+        const player = makeSnake(0, PLAYER, true);
+        const headX = 8;
+        const headY = Math.floor(rows / 2);
+        player.dir = DIRECTIONS.right;
+        player.body = Array.from({ length: START_LENGTH }, (_, i) => ({ x: headX - i, y: headY }));
+        player.alive = true;
+        world.snakes.push(player);
+    }
+
+    BOTS.forEach((bot) => {
+        const snake = makeSnake(freeId(world), bot, false);
         world.snakes.push(snake);
-        spawnBot(world, snake);
+        spawnSnake(world, snake);
     });
 
     refillFood(world);
@@ -68,44 +87,90 @@ export function createWorld(random = Math.random) {
     return world;
 }
 
+/**
+ * Multiplayer: add a player to a random empty spot. Returns its snake.
+ */
+export function addPlayer(world, { name, color }) {
+    const snake = makeSnake(freeId(world), { name, color }, true);
+    world.snakes.push(snake);
+    spawnSnake(world, snake);
+    protectNewcomer(world, snake);
+    return snake;
+}
+
+/**
+ * A player who just joined or came back can't crash into snakes (or be crashed into) for a
+ * moment, so they get a chance to steer before a passing snake ends their game. They blink meanwhile.
+ */
+function protectNewcomer(world, snake) {
+    snake.effects.grace = world.time + SPAWN_GRACE_MS;
+}
+
+export function removePlayer(world, id) {
+    world.snakes = world.snakes.filter((snake) => snake.id !== id);
+}
+
+/**
+ * Multiplayer: bring a crashed player back as a fresh four-segment snake with no points.
+ */
+export function respawnPlayer(world, snake) {
+    snake.points = 0;
+    snake.effects = {};
+    snake.deathCause = null;
+    const spawned = spawnSnake(world, snake);
+    protectNewcomer(world, snake);
+    return spawned;
+}
+
+/** The solo player. */
 export function getPlayer(world) {
     return world.snakes[0];
 }
 
 /**
- * How long one move takes; the game speeds up as the player grows, and slow-mo stretches it.
+ * How long one move takes. Solo, the game speeds up as the player grows; online it keeps an
+ * even pace for everyone. Slow-mo stretches it (online, for everyone while anyone has it).
  */
 export function tickDuration(world) {
-    const growth = getPlayer(world).body.length - START_LENGTH;
-    const duration = Math.max(MIN_TICK_MS, START_TICK_MS - growth * TICK_MS_PER_SEGMENT);
-    return isEffectActive(world, 'slow') ? duration * SLOW_MO_FACTOR : duration;
+    let duration = MULTIPLAYER_TICK_MS;
+    if (!world.multiplayer) {
+        const growth = getPlayer(world).body.length - START_LENGTH;
+        duration = Math.max(MIN_TICK_MS, START_TICK_MS - growth * TICK_MS_PER_SEGMENT);
+    }
+    const slowed = world.snakes.some((snake) => snake.isPlayer && isEffectActive(world, 'slow', snake));
+    return slowed ? duration * SLOW_MO_FACTOR : duration;
 }
 
-export function isEffectActive(world, type) {
-    return (world.effects[type] ?? 0) > world.time;
+export function isEffectActive(world, type, snake = getPlayer(world)) {
+    return (snake?.effects?.[type] ?? 0) > world.time;
 }
 
 /**
- * The player's running power-ups with the time left, for the HUD.
+ * A player's running power-ups with the time left, for the HUD.
  */
-export function activePowerUps(world) {
-    return POWER_UPS.filter((powerUp) => isEffectActive(world, powerUp.type)).map((powerUp) => ({
+export function activePowerUps(world, snake = getPlayer(world)) {
+    return POWER_UPS.filter((powerUp) => isEffectActive(world, powerUp.type, snake)).map((powerUp) => ({
         ...powerUp,
-        remainingMs: world.effects[powerUp.type] - world.time,
+        remainingMs: snake.effects[powerUp.type] - world.time,
     }));
 }
 
 /**
- * Advance the game by one move. Returns the events that happened (eating, deaths).
+ * Advance the game by one move and return what happened (eating, crashes, power-ups).
+ * `turns` is the solo player's new direction, or, online, { [snake id]: direction }.
  */
-export function step(world, playerDirection, elapsedMs) {
+export function step(world, turns, elapsedMs) {
     const events = [];
     world.time += elapsedMs;
+    const players = world.snakes.filter((snake) => snake.isPlayer);
+    const turnFor = (snake) => (turns && 'x' in turns ? (snake === getPlayer(world) ? turns : null) : turns?.[snake.id]);
 
-    for (const powerUp of POWER_UPS) {
-        if (world.effects[powerUp.type] && !isEffectActive(world, powerUp.type)) {
-            delete world.effects[powerUp.type];
-            events.push({ type: 'powerUpEnded', powerUp });
+    for (const player of players) {
+        for (const powerUp of POWER_UPS) {
+            if (player.effects[powerUp.type] && !isEffectActive(world, powerUp.type, player)) {
+                delete player.effects[powerUp.type];
+                events.push({ type: 'powerUpEnded', powerUp, snake: player });
+            }
         }
     }
     for (const food of world.foods) {
@@ -121,8 +186,9 @@ export function step(world, playerDirection, elapsedMs) {
 
     for (const snake of movers) {
         if (snake.isPlayer) {
-            if (playerDirection && !isReverse(playerDirection, snake.dir)) {
-                snake.dir = playerDirection;
+            const turn = turnFor(snake);
+            if (turn && !isReverse(turn, snake.dir)) {
+                snake.dir = turn;
             }
         } else {
             snake.dir = chooseBotDirection(world, snake, grid);
@@ -141,10 +207,11 @@ export function step(world, playerDirection, elapsedMs) {
     }
 
     const crashes = findCrashes(world, movers);
-    const player = getPlayer(world);
-    if (crashes.has(player) && isEffectActive(world, 'shield')) {
-        events.push(breakShield(world, player, crashes.get(player)));
-        crashes.delete(player);
+    for (const [snake, cause] of crashes) {
+        if (snake.isPlayer && isEffectActive(world, 'shield', snake)) {
+            events.push(breakShield(world, snake, cause));
+            crashes.delete(snake);
+        }
     }
 
     for (const [snake, cause] of crashes) {
@@ -162,7 +229,9 @@ export function step(world, playerDirection, elapsedMs) {
         }
     }
 
-    events.push(...pullFoodToPlayer(world));
+    for (const player of players) {
+        events.push(...pullFoodToPlayer(world, player));
+    }
     refillFood(world);
 
     return events;
@@ -173,8 +242,8 @@ export function step(world, playerDirection, elapsedMs) {
  * back and turns it toward open space; then it can't hit snakes for a moment.
  */
 function breakShield(world, player, cause) {
-    delete world.effects.shield;
-    world.effects.grace = world.time + SHIELD_GRACE_MS;
+    delete player.effects.shield;
+    player.effects.grace = world.time + SHIELD_GRACE_MS;
 
     if (cause.type === 'wall') {
         player.body = player.previousBody.map((cell) => ({ ...cell }));
@@ -200,19 +269,18 @@ function escapeDirection(world, snake) {
 }
 
 /**
- * The player is see-through while a ghost, and just after a shield breaks.
+ * A player is see-through while a ghost, and just after its shield breaks.
  */
 function isIntangible(world, snake) {
-    return snake.isPlayer && (isEffectActive(world, 'ghost') || isEffectActive(world, 'grace'));
+    return snake.isPlayer && (isEffectActive(world, 'ghost', snake) || isEffectActive(world, 'grace', snake));
 }
 
 /**
- * Magnet: food near the player's head slides one cell closer each move, and food
+ * Magnet: food near a player's head slides one cell closer each move, and food
  * within two cells is pulled straight in (so it can't trail diagonally beside the head).
  */
-function pullFoodToPlayer(world) {
-    const player = getPlayer(world);
-    if (!player.alive || !isEffectActive(world, 'magnet')) {
+function pullFoodToPlayer(world, player) {
+    if (!player.alive || !isEffectActive(world, 'magnet', player)) {
         return [];
     }
 
@@ -224,7 +292,7 @@ function pullFoodToPlayer(world) {
         const dx = head.x - food.x;
         const dy = head.y - food.y;
         const distance = Math.abs(dx) + Math.abs(dy);
-        if (food.kind === 'power' || distance === 0 || distance > MAGNET_RADIUS) {
+        if (food.kind === 'power' || distance === 0 || distance > MAGNET_RADIUS || !world.foods.includes(food)) {
             continue;
         }
 
@@ -288,9 +356,11 @@ function killSnake(world, snake, cause) {
     snake.alive = false;
 
     if (snake.isPlayer) {
-        world.over = true;
-        world.deathCause = cause;
-        return;
+        snake.deathCause = cause;
+        if (!world.multiplayer) {
+            world.over = true;
+            return;
+        }
     }
 
     snake.body.forEach((cell, index) => {
@@ -310,7 +380,7 @@ function killSnake(world, snake, cause) {
 }
 
 /**
- * Remove and return the food at a cell. Only the player can pick up power-ups.
+ * Remove and return the food at a cell. Only players can pick up power-ups.
  */
 function takeFoodAt(world, snake, cell) {
     const index = world.foods.findIndex(
@@ -323,13 +393,13 @@ function eat(world, snake, food) {
     const at = { ...snake.body[0] };
 
     if (food.kind === 'power') {
-        world.effects[food.powerUp.type] = world.time + food.powerUp.durationMs;
+        snake.effects[food.powerUp.type] = world.time + food.powerUp.durationMs;
         return { type: 'powerUp', snake, food, powerUp: food.powerUp, at };
     }
 
     snake.growth += food.grow;
     if (snake.isPlayer) {
-        world.points += food.points;
+        snake.points += food.points;
     } else {
         snake.growth = Math.min(snake.growth, Math.max(0, BOT_MAX_LENGTH - snake.body.length));
     }
@@ -340,7 +410,7 @@ function eat(world, snake, food) {
 function respawnBots(world) {
     for (const snake of world.snakes) {
         if (!snake.alive && !snake.isPlayer && world.time >= snake.respawnAt) {
-            spawnBot(world, snake);
+            spawnSnake(world, snake);
         }
     }
 }
@@ -395,7 +465,7 @@ function updatePowerUps(world) {
 
 function refillFood(world) {
     let count = world.foods.filter((food) => food.kind === 'food').length;
-    while (count < FOOD_COUNT) {
+    while (count < world.foodCount) {
         const cell = randomFreeCell(world);
         if (!cell) {
             return;
@@ -406,11 +476,11 @@ function refillFood(world) {
 }
 
 /**
- * Place a bot somewhere empty, facing open space and away from the player.
+ * Place a snake somewhere empty, facing open space and away from every player's head.
  */
-function spawnBot(world, snake) {
+function spawnSnake(world, snake) {
     const grid = occupancyGrid(world);
-    const player = getPlayer(world);
+    const heads = world.snakes.filter((other) => other.isPlayer && other.alive && other !== snake).map((other) => other.body[0]);
     const directions = Object.values(DIRECTIONS);
 
     for (let attempt = 0; attempt < 200; attempt++) {
@@ -418,7 +488,7 @@ function spawnBot(world, snake) {
         const x = 3 + Math.floor(world.random() * (world.cols - 6));
         const y = 3 + Math.floor(world.random() * (world.rows - 6));
 
-        if (player.alive && Math.abs(player.body[0].x - x) + Math.abs(player.body[0].y - y) < BOT_SAFE_DISTANCE) {
+        if (heads.some((head) => Math.abs(head.x - x) + Math.abs(head.y - y) < BOT_SAFE_DISTANCE)) {
             continue;
         }
 
@@ -434,6 +504,7 @@ function spawnBot(world, snake) {
             snake.dir = dir;
             snake.growth = 0;
             snake.alive = true;
+            snake.spawnedAt = world.time;
             return true;
         }
     }
@@ -476,6 +547,16 @@ function foodAt(world, x, y) {
     return world.foods.find((food) => food.x === x && food.y === y);
 }
 
+/** The lowest id no snake is using (ids fit in the occupancy grid's bytes). */
+function freeId(world) {
+    const used = new Set(world.snakes.map((snake) => snake.id));
+    let id = 0;
+    while (used.has(id)) {
+        id++;
+    }
+    return id;
+}
+
 function makeSnake(id, { name, color }, isPlayer) {
     return {
         id,
@@ -488,6 +569,10 @@ function makeSnake(id, { name, color }, isPlayer) {
         growth: 0,
         alive: false,
         respawnAt: 0,
+        spawnedAt: 0,
+        points: 0,
+        effects: {},
+        deathCause: null,
     };
 }
 

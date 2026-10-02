@@ -3,8 +3,10 @@ import {
     BOTS,
     DIRECTIONS,
     activePowerUps,
+    connectOnline,
     createWorld,
     describeBotCrash,
+    directionName,
     directionToward,
     getPlayer,
     isReverse,
@@ -19,12 +21,17 @@ const MAX_QUEUED_TURNS = 3;
  * The screen calls frame() on every animation frame and gets back a Skia picture to show;
  * onChange reports the HUD and game state whenever they change.
  * `translate()` returns the current language's translate function, so messages follow a language switch.
+ * `shape` ({ cols, rows }) is the field size for new games: upright when the phone is held upright.
+ *
+ * Solo, the whole game runs here. Online (joinOnline), the multiplayer server runs it and this
+ * draws what the server sends and passes the player's turns back.
  */
-export function createGame({ sound, translate, best: initialBest = 0, onChange, onMessage, onNewBest }) {
+export function createGame({ sound, translate, shape: initialShape, best: initialBest = 0, onChange, onMessage, onNewBest }) {
     const t = (key, params) => translate()(key, params);
     const powerUpName = (powerUp) => t(`powerUp.${powerUp.type}`);
-    const renderer = createRenderer({ label: powerUpName });
-    let world = createWorld();
+    const renderer = createRenderer({ label: powerUpName, youLabel: () => t('youTag') });
+    let shape = initialShape;
+    let world = createWorld(Math.random, shape);
     let status = 'ready';
     let turnQueue = [];
     let pointerTarget = null;
@@ -32,16 +39,33 @@ export function createGame({ sound, translate, best: initialBest = 0, onChange, 
     let lastFrame = performance.now();
     let best = initialBest;
     let result = null;
+    /** While playing online: { connection, world, lastStateAt, lastLength }. */
+    let online = null;
+
+    const shownWorld = () => online?.world ?? world;
+    const me = () => (online ? online.world.me() : getPlayer(world));
 
     function snapshot() {
-        const player = getPlayer(world);
+        const shown = shownWorld();
+        const player = me();
+        const points = player?.points ?? 0;
+        const others = shown.snakes.filter((snake) => snake !== player);
         return {
             status,
-            points: world.points,
-            length: player.body.length,
-            best: Math.max(best, world.points),
-            bots: `${world.snakes.filter((snake) => !snake.isPlayer && snake.alive).length}/${BOTS.length}`,
-            powerUps: status === 'over' ? [] : activePowerUps(world),
+            online: Boolean(online),
+            cols: shown.cols,
+            rows: shown.rows,
+            points,
+            length: player?.body.length ?? 0,
+            best: Math.max(best, points),
+            bots: `${others.filter((snake) => snake.alive).length}/${online ? others.length : BOTS.length}`,
+            powerUps: status === 'over' || !player ? [] : activePowerUps(shown, player),
+            players: online
+                ? shown.snakes
+                      .filter((snake) => snake.isPlayer)
+                      .sort((a, b) => b.points - a.points)
+                      .map((snake) => ({ id: snake.id, name: snake.name, color: snake.color, points: snake.points, alive: snake.alive, isMe: snake === player }))
+                : [],
             result,
         };
     }
@@ -49,16 +73,25 @@ export function createGame({ sound, translate, best: initialBest = 0, onChange, 
     const emit = () => onChange(snapshot());
 
     function newGame() {
-        world = createWorld();
-        turnQueue = [];
-        pointerTarget = null;
-        accumulated = 0;
         result = null;
+        pointerTarget = null;
+        if (online) {
+            online.connection.send({ type: 'respawn' });
+            status = 'playing';
+            emit();
+            return;
+        }
+        world = createWorld(Math.random, shape);
+        turnQueue = [];
+        accumulated = 0;
         status = 'playing';
         emit();
     }
 
     function setPaused(paused) {
+        if (online) {
+            return;
+        }
         if (paused && status === 'playing') {
             status = 'paused';
             emit();
@@ -71,6 +104,12 @@ export function createGame({ sound, translate, best: initialBest = 0, onChange, 
 
     function queueTurn(name) {
         pointerTarget = null;
+        if (online) {
+            if (status === 'playing') {
+                online.connection.send({ type: 'turn', dir: name });
+            }
+            return;
+        }
         if (status === 'ready') {
             newGame();
         }
@@ -87,48 +126,111 @@ export function createGame({ sound, translate, best: initialBest = 0, onChange, 
     }
 
     function handleEvents(events, effectDelayMs) {
+        const player = me();
         for (const event of events) {
             renderer.showEvent(event, effectDelayMs);
+            const isMine = event.snake && event.snake === player;
 
-            if (event.type === 'eat' && event.snake.isPlayer) {
+            if (event.type === 'eat' && isMine) {
                 sound.eat();
-            } else if (event.type === 'fruit' && event.snake.isPlayer) {
+            } else if (event.type === 'fruit' && isMine) {
                 sound.fruit();
-            } else if (event.type === 'botDied') {
+            } else if (event.type === 'botDied' || (event.type === 'playerDied' && !isMine)) {
                 sound.botDied();
-                onMessage(describeBotCrash(translate(), event.snake, event.cause));
+                onMessage(describeBotCrash(translate(), event.snake, event.cause, player));
             } else if (event.type === 'playerDied') {
                 sound.playerDied();
-            } else if (event.type === 'powerUp') {
+            } else if (event.type === 'powerUp' && isMine) {
                 sound.powerUp();
                 onMessage(t('powerUpGot', { emoji: event.powerUp.emoji, label: powerUpName(event.powerUp) }));
-            } else if (event.type === 'shieldBroke') {
+            } else if (event.type === 'shieldBroke' && isMine) {
                 sound.shieldBroke();
                 onMessage(t('shieldSaved'));
-            } else if (event.type === 'powerUpEnded') {
+            } else if (event.type === 'powerUpEnded' && isMine) {
                 sound.powerUpEnded();
                 onMessage(t('powerUpEnded', { label: powerUpName(event.powerUp) }));
             }
         }
     }
 
-    function gameOver() {
+    function gameOver({ points, length, cause }) {
         status = 'over';
-        const isNewBest = world.points > best;
+        const isNewBest = points > best;
         if (isNewBest) {
-            best = world.points;
+            best = points;
             onNewBest(best);
         }
-        result = {
-            cause: world.deathCause,
-            points: world.points,
-            length: getPlayer(world).body.length,
-            isNewBest,
-        };
+        result = { cause, points, length, isNewBest };
+    }
+
+    /**
+     * Join the game server at `url` as `name`. `onDone(reason)` reports the outcome:
+     * null when joined, or 'offline' / 'full' when it couldn't.
+     */
+    function joinOnline(url, name, onDone) {
+        const connection = connectOnline(url, name, {
+            onJoined(remote) {
+                online = { connection, world: remote, lastStateAt: performance.now(), lastLength: remote.me().body.length };
+                status = 'playing';
+                result = null;
+                pointerTarget = null;
+                onDone(null);
+                emit();
+            },
+            onState(remote, events) {
+                online.lastStateAt = performance.now();
+                handleEvents(events, remote.tickMs);
+                const player = remote.me();
+                const myCrash = events.find((event) => event.type === 'playerDied' && event.snake === player);
+                if (myCrash && status === 'playing') {
+                    // The server clears a crashed snake's body, so use its length from the move before.
+                    gameOver({ points: player.points, length: online.lastLength, cause: myCrash.cause });
+                }
+                if (player?.alive) {
+                    online.lastLength = player.body.length;
+                }
+                if (status === 'playing' && pointerTarget && player?.alive) {
+                    const turn = directionToward(player, pointerTarget, remote);
+                    if (turn) {
+                        connection.send({ type: 'turn', dir: directionName(turn) });
+                    }
+                }
+                emit();
+            },
+            onFailed: (reason) => onDone(reason),
+            onClosed() {
+                leaveOnline();
+                onMessage(t('disconnected'));
+            },
+        });
+    }
+
+    function leaveOnline() {
+        online?.connection.leave();
+        online = null;
+        world = createWorld(Math.random, shape);
+        status = 'ready';
+        result = null;
+        pointerTarget = null;
+        emit();
     }
 
     return {
         start: newGame,
+        joinOnline,
+        leaveOnline,
+
+        /** Use a new field shape from the next game on; before the first game, switch right away. */
+        setShape(next) {
+            if (next.cols === shape.cols && next.rows === shape.rows) {
+                return;
+            }
+            shape = next;
+            if (status === 'ready' && !online) {
+                world = createWorld(Math.random, shape);
+                emit();
+            }
+        },
         pause: () => setPaused(true),
         resume: () => setPaused(false),
         queueTurn,
@@ -142,6 +244,11 @@ export function createGame({ sound, translate, best: initialBest = 0, onChange, 
             const elapsed = Math.min(now - lastFrame, 250);
             lastFrame = now;
 
+            if (online) {
+                const progress = Math.min((now - online.lastStateAt) / online.world.tickMs, 1);
+                return renderer.draw(online.world, now, progress, status === 'playing' ? pointerTarget : null, width, height);
+            }
+
             if (status === 'playing') {
                 accumulated += elapsed;
                 let duration = tickDuration(world);
@@ -151,7 +258,7 @@ export function createGame({ sound, translate, best: initialBest = 0, onChange, 
                     const turn = turnQueue.shift() ?? (pointerTarget && directionToward(getPlayer(world), pointerTarget, world));
                     handleEvents(step(world, turn, duration), duration - accumulated);
                     if (world.over) {
-                        gameOver();
+                        gameOver({ points: world.points, length: getPlayer(world).body.length, cause: world.deathCause });
                     }
                     emit();
                     duration = tickDuration(world);

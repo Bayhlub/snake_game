@@ -34,7 +34,29 @@ export function Leaderboard({ t, scores, state, onRetry }) {
     );
 }
 
+/**
+ * Online: everyone in the game right now, best score first. A crashed player shows 💥 until they rejoin.
+ */
+export function OnlinePlayers({ t, players }) {
+    return (
+        <Panel style={[styles.panel, styles.onlinePanel]}>
+            <Text style={styles.heading}>{t('onlineNow')}</Text>
+            {players.map((player, i) => (
+                <View key={player.id} style={[styles.row, i % 2 === 0 && styles.rowShaded]}>
+                    <View style={[styles.dot, { backgroundColor: player.color }]} />
+                    <Text style={styles.name} numberOfLines={1}>
+                        {player.isMe ? `${player.name} (${t('you')})` : player.name}
+                    </Text>
+                    <Text style={styles.points}>{player.alive ? player.points : '💥'}</Text>
+                </View>
+            ))}
+        </Panel>
+    );
+}
+
 const styles = StyleSheet.create({
+    onlinePanel: { borderColor: 'rgba(186, 230, 253, 0.25)' },
+    dot: { width: 12, height: 12, borderRadius: 6 },
     panel: { padding: 14, gap: 4 },
     heading: { fontFamily: fonts.bold, fontSize: 18, color: colors.text, marginBottom: 6 },
     note: { fontFamily: fonts.regular, fontSize: 14, color: colors.faint },

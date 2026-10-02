@@ -14,12 +14,58 @@ function Overlay({ children, dim = 0.45 }) {
     );
 }
 
-export function StartOverlay({ t, onStart }) {
+export function StartOverlay({ t, onStart, onPlayOnline }) {
     return (
         <Overlay>
             <Text style={styles.bigEmoji}>🐍🍎</Text>
             <Text style={styles.title}>{t('ready')}</Text>
             <Button label={t('startGame')} size="large" onPress={onStart} />
+            <Button label={t('playOnline')} variant="ghost" onPress={onPlayOnline} />
+        </Overlay>
+    );
+}
+
+/**
+ * Online: pick a name and the game server's address (shown when the server starts,
+ * e.g. ws://192.168.0.168:8787), then join.
+ */
+export function JoinOverlay({ t, name, onChangeName, server, onChangeServer, onJoin, joining, status, onBack }) {
+    return (
+        <Overlay dim={0.6}>
+            <Text style={styles.title}>{t('joinTitle')}</Text>
+            <Text style={styles.cause}>{t('joinHint')}</Text>
+            <View style={styles.form}>
+                <TextInput
+                    value={name}
+                    onChangeText={onChangeName}
+                    placeholder={t('yourName')}
+                    placeholderTextColor="rgba(209, 250, 229, 0.4)"
+                    maxLength={20}
+                    autoComplete="nickname"
+                    style={styles.input}
+                    accessibilityLabel={t('yourName')}
+                />
+                <TextInput
+                    value={server}
+                    onChangeText={onChangeServer}
+                    placeholder="ws://192.168.0.10:8787"
+                    placeholderTextColor="rgba(209, 250, 229, 0.4)"
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    keyboardType="url"
+                    returnKeyType="go"
+                    onSubmitEditing={onJoin}
+                    style={styles.input}
+                    accessibilityLabel={t('serverAddress')}
+                />
+                <Button label={t('join')} onPress={onJoin} disabled={joining} />
+                {status !== '' && (
+                    <Text style={styles.status} accessibilityLiveRegion="polite">
+                        {status}
+                    </Text>
+                )}
+            </View>
+            <Button label={t('back')} variant="ghost" size="small" onPress={onBack} />
         </Overlay>
     );
 }

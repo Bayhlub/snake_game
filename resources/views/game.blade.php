@@ -34,6 +34,7 @@
                         <button type="button" data-language="en" lang="en" aria-pressed="true" class="lang-option">EN</button>
                         <button type="button" data-language="lo" lang="lo" aria-pressed="false" class="lang-option">ລາວ</button>
                     </div>
+                    <button id="leave-online" type="button" hidden data-i18n="leave" class="rounded-full bg-rose-400/15 px-4 py-2 text-sm font-bold text-rose-200 ring-1 ring-rose-300/30 transition hover:bg-rose-400/25">Leave</button>
                     <button id="install-button" type="button" hidden data-i18n="installApp" class="rounded-full bg-emerald-400 px-4 py-2 text-sm font-bold text-emerald-950 transition hover:bg-emerald-300">📲 Install app</button>
                     <button id="sound-toggle" type="button" class="rounded-full bg-white/5 px-4 py-2 text-sm font-medium ring-1 ring-white/10 transition hover:bg-white/10"></button>
                 </div>
@@ -74,7 +75,22 @@
                                 <p class="text-4xl sm:text-5xl">🐍🍎</p>
                                 <h2 data-i18n="ready" class="text-2xl font-bold sm:text-3xl">Ready?</h2>
                                 <button id="start-button" type="button" data-i18n="startGame" class="rounded-full bg-emerald-400 px-8 py-3 text-lg font-bold text-emerald-950 shadow-lg shadow-emerald-500/30 transition hover:bg-emerald-300">Start game</button>
+                                <button id="online-button" type="button" data-i18n="playOnline" class="rounded-full bg-white/10 px-6 py-2 font-bold ring-1 ring-white/20 transition hover:bg-white/20">🌐 Play online</button>
                                 <p class="text-sm text-emerald-100/70 pointer-coarse:hidden"><span data-i18n="orPress">or press</span> <kbd class="kbd">Space</kbd> <span data-i18n="orArrowKey">or an arrow key</span></p>
+                            </div>
+
+                            <div id="overlay-join" hidden class="absolute inset-0 flex flex-col items-center justify-center gap-3 overflow-y-auto rounded-2xl bg-black/60 p-6 text-center backdrop-blur-[3px]">
+                                <h2 data-i18n="joinTitle" class="text-2xl font-bold sm:text-3xl">Play online</h2>
+                                <p data-i18n="joinHint" class="max-w-sm text-sm text-emerald-100/75">Everyone who joins plays on one board, with the computer snakes.</p>
+                                <form id="join-form" class="flex w-full max-w-sm flex-col gap-2">
+                                    <label for="join-name" data-i18n="yourName" class="sr-only">Your name</label>
+                                    <div class="flex gap-2">
+                                        <input id="join-name" type="text" maxlength="20" autocomplete="nickname" placeholder="Your name" data-i18n-placeholder="yourName" class="min-w-0 flex-1 rounded-full bg-white/10 px-4 py-2 text-emerald-50 ring-1 ring-white/20 placeholder:text-emerald-100/40 focus:ring-2 focus:ring-emerald-400 focus:outline-none">
+                                        <button id="join-button" type="submit" data-i18n="join" class="rounded-full bg-emerald-400 px-5 py-2 font-bold text-emerald-950 transition hover:bg-emerald-300 disabled:opacity-50">Join</button>
+                                    </div>
+                                    <p id="join-status" class="min-h-5 text-sm text-emerald-100/80" aria-live="polite"></p>
+                                </form>
+                                <button id="join-back" type="button" data-i18n="back" class="text-sm font-semibold text-emerald-100/70 underline-offset-4 hover:underline">Back</button>
                             </div>
 
                             <div id="overlay-pause" hidden class="absolute inset-0 flex flex-col items-center justify-center gap-4 rounded-2xl bg-black/45 p-6 text-center backdrop-blur-[3px]">
@@ -124,6 +140,18 @@
                 </main>
 
                 <aside class="space-y-4">
+                    <section id="online-panel" hidden class="rounded-2xl bg-linear-to-b from-sky-300/10 to-white/[0.03] p-4 ring-1 ring-sky-200/20">
+                        <h2 data-i18n="onlineNow" class="mb-3 text-lg font-bold">🌐 Playing now</h2>
+                        <ol id="online-players" class="space-y-1 text-sm"></ol>
+                        <template id="online-player-row">
+                            <li class="flex items-center gap-3 rounded-lg px-2 py-1 odd:bg-white/5">
+                                <span data-dot class="size-3 shrink-0 rounded-full"></span>
+                                <span data-name class="flex-1 truncate"></span>
+                                <span data-points class="font-bold tabular-nums"></span>
+                            </li>
+                        </template>
+                    </section>
+
                     <section class="rounded-2xl bg-linear-to-b from-white/10 to-white/[0.03] p-4 ring-1 ring-white/10">
                         <h2 data-i18n="topTen" class="mb-3 text-lg font-bold">🏆 Top 10</h2>
                         <ol id="leaderboard" class="space-y-1 text-sm"></ol>

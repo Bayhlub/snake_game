@@ -12,13 +12,17 @@ const EMOJI_FONT = `${Math.round(CELL * 1.05)}px "Segoe UI Emoji", "Apple Color 
 const ORB_EMOJI_FONT = `${Math.round(CELL * 0.62)}px "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif`;
 const POPUP_FONT = `700 ${Math.round(CELL * 0.8)}px Fredoka, "Noto Sans Lao", "Leelawadee UI", "Lao Sangam MN", ui-sans-serif, system-ui, sans-serif`;
 const FIREFLIES = 14;
+const YOU_COLOR = '#4ade80';
+const TAG_FONT = `700 ${Math.round(CELL * 0.95)}px Fredoka, "Noto Sans Lao", "Leelawadee UI", "Lao Sangam MN", ui-sans-serif, system-ui, sans-serif`;
+/** How long the rings around the player's head pulse at the start of a game. */
+const INTRO_MS = 3500;
 
 /**
  * Draws the world onto a canvas. The canvas keeps a fixed pixel size and CSS scales it to fit.
  * Snakes glide between cells: `progress` (0–1) says how far the current move has gone.
- * `label(powerUp)` gives a power-up's name in the player's language.
+ * `label(powerUp)` gives a power-up's name in the player's language, `youLabel()` the player's name tag.
  */
-export function createRenderer(canvas, cols, rows, { label = (powerUp) => powerUp.label } = {}) {
+export function createRenderer(canvas, cols, rows, { label = (powerUp) => powerUp.label, youLabel = () => 'YOU' } = {}) {
     const ctx = canvas.getContext('2d');
     const width = cols * CELL;
     const height = rows * CELL;
@@ -128,7 +132,9 @@ export function createRenderer(canvas, cols, rows, { label = (powerUp) => powerU
                 return false;
             });
             const soonEaten = pending.map((effect) => effect.event.food).filter(Boolean);
-            const player = world.snakes[0];
+            // Solo there is one player; online, `meId` says which of the players is on this device.
+            const players = world.snakes.filter((snake) => snake.isPlayer);
+            const me = world.meId != null ? players.find((snake) => snake.id === world.meId) : players[0];
 
             ctx.fillStyle = '#07100c';
             ctx.fillRect(0, 0, width, height);
@@ -152,7 +158,7 @@ export function createRenderer(canvas, cols, rows, { label = (powerUp) => powerU
                 drawTarget(ctx, target, now);
             }
 
-            const lookAt = (snake) => nearestFood(world, snake, target);
+            const lookAt = (snake) => nearestFood(world, snake, snake === me ? target : null);
             for (const snake of world.snakes) {
                 if (snake.body.length) {
                     drawShadow(ctx, snakePoints(snake, progress));
@@ -163,7 +169,15 @@ export function createRenderer(canvas, cols, rows, { label = (powerUp) => powerU
                     drawSnake(ctx, snake, snakePoints(snake, progress), snake.color, now, lookAt(snake));
                 }
             }
-            drawPlayer(ctx, world, player, snakePoints(player, progress), now, lookAt(player));
+            // Everyone else first, so your own snake and tag are always on top.
+            for (const player of [...players.filter((snake) => snake !== me), ...(me ? [me] : [])]) {
+                const points = snakePoints(player, progress);
+                drawPlayer(ctx, world, player, points, now, lookAt(player));
+                if (player.alive && points.length) {
+                    const isMe = player === me;
+                    drawNameTag(ctx, world, player, points[0], isMe ? youLabel() : player.name, now, isMe);
+                }
+            }
 
             particles = particles.filter((particle) => {
                 particle.life -= particle.decay * elapsed;
@@ -215,7 +229,7 @@ export function createRenderer(canvas, cols, rows, { label = (powerUp) => powerU
             ctx.globalAlpha = 1;
             ctx.restore();
 
-            if (isEffectActive(world, 'slow')) {
+            if (players.some((player) => isEffectActive(world, 'slow', player))) {
                 ctx.globalAlpha = 0.12 + Math.sin(now / 400) * 0.03;
                 ctx.fillStyle = SLOW_TINT;
                 ctx.fillRect(0, 0, width, height);
@@ -256,7 +270,7 @@ function nearestFood(world, snake, target) {
     if (!head) {
         return null;
     }
-    if (snake.isPlayer && target) {
+    if (target) {
         return target;
     }
     let best = null;
@@ -299,7 +313,7 @@ function drawPlayer(ctx, world, player, points, now, lookAt) {
     const alive = player.alive;
     const head = points[0];
 
-    if (alive && isEffectActive(world, 'magnet')) {
+    if (alive && isEffectActive(world, 'magnet', player)) {
         for (let i = 0; i < 2; i++) {
             const t = (now / 900 + i / 2) % 1;
             ctx.globalAlpha = (1 - t) * 0.45;
@@ -313,15 +327,15 @@ function drawPlayer(ctx, world, player, points, now, lookAt) {
     }
 
     let alpha = 1;
-    if (alive && isEffectActive(world, 'ghost')) {
+    if (alive && isEffectActive(world, 'ghost', player)) {
         alpha = 0.42 + Math.sin(now / 160) * 0.08;
-    } else if (alive && isEffectActive(world, 'grace')) {
+    } else if (alive && isEffectActive(world, 'grace', player)) {
         alpha = Math.floor(now / 90) % 2 ? 0.35 : 0.9;
     }
 
     drawSnake(ctx, player, points, alive ? player.color : DEAD_COLOR, now, lookAt, alpha);
 
-    if (alive && isEffectActive(world, 'shield')) {
+    if (alive && isEffectActive(world, 'shield', player)) {
         const pulse = 1 + Math.sin(now / 220) * 0.06;
         const radius = CELL * 0.95 * pulse;
         const bubble = ctx.createRadialGradient(head.x - radius * 0.3, head.y - radius * 0.3, 1, head.x, head.y, radius);
@@ -346,6 +360,53 @@ function drawPlayer(ctx, world, player, points, now, lookAt) {
         ctx.stroke();
         ctx.globalAlpha = 1;
     }
+}
+
+/**
+ * A name tag pointing at a player's head (below it when the head is near the top wall): "YOU" on
+ * your own snake, the player's name on others. Yours also pulses rings for a few seconds after it appears.
+ */
+function drawNameTag(ctx, world, snake, head, text, now, isMe) {
+    const intro = isMe ? Math.max(0, 1 - (world.time - (snake.spawnedAt ?? 0)) / INTRO_MS) : 0;
+    const tagColor = isMe && !world.multiplayer ? YOU_COLOR : snake.color;
+    const width = world.cols * CELL;
+
+    for (let i = 0; intro > 0 && i < 2; i++) {
+        const t = (now / 750 + i / 2) % 1;
+        ctx.globalAlpha = intro * (1 - t) * 0.85;
+        ctx.strokeStyle = tagColor;
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.arc(head.x, head.y, CELL * (0.9 + t * 2.4), 0, Math.PI * 2);
+        ctx.stroke();
+    }
+
+    ctx.font = TAG_FONT;
+    const tagWidth = ctx.measureText(text).width + CELL;
+    const tagHeight = CELL * 1.3;
+    const below = head.y < CELL * 2.6;
+    const bounce = Math.sin(now / 160) * 2.5 * intro;
+    const cy = head.y + (below ? CELL * 1.6 : -CELL * 1.6) + bounce * (below ? 1 : -1);
+    const cx = Math.min(Math.max(head.x, tagWidth / 2 + 2), width - tagWidth / 2 - 2);
+    const tipY = cy + (below ? -tagHeight / 2 - 4 : tagHeight / 2 + 4);
+
+    ctx.globalAlpha = 0.92;
+    ctx.fillStyle = '#052e16';
+    ctx.strokeStyle = tagColor;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.roundRect(cx - tagWidth / 2, cy - tagHeight / 2, tagWidth, tagHeight, tagHeight / 2);
+    ctx.moveTo(head.x - 4, below ? cy - tagHeight / 2 : cy + tagHeight / 2);
+    ctx.lineTo(head.x, tipY);
+    ctx.lineTo(head.x + 4, below ? cy - tagHeight / 2 : cy + tagHeight / 2);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = '#dcfce7';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, cx, cy + 0.5);
 }
 
 function drawSnake(ctx, snake, points, color, now, lookAt, opacity = 1) {
