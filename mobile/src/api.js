@@ -1,5 +1,6 @@
 /**
- * Talks to the Laravel app's leaderboard API (routes/api.php).
+ * Talks to the Top 10 API: the Node.js one on Vercel (web/api/scores.js), or the Laravel app's
+ * routes/api.php, which works the same way.
  * Set EXPO_PUBLIC_API_URL in mobile/.env.local to the site's address, e.g. https://snake.example.com
  */
 const API_URL = process.env.EXPO_PUBLIC_API_URL?.replace(/\/+$/, '') ?? '';
