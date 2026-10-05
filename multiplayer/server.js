@@ -3,9 +3,10 @@ import { networkInterfaces } from 'node:os';
 
 import { WebSocketServer } from 'ws';
 
-import { DIRECTIONS, MAX_PLAYERS, MULTIPLAYER_PORT, PLAYER_COLORS } from '../resources/js/snake/config.js';
+import { DIRECTION_ANGLES, MAX_PLAYERS, MULTIPLAYER_PORT } from '../resources/js/snake/config.js';
 import { packEvent, packWorld } from '../resources/js/snake/net.js';
-import { addPlayer, createWorld, isReverse, removePlayer, respawnPlayer, step, tickDuration } from '../resources/js/snake/world.js';
+import { SKINS, isSkin, skinById } from '../resources/js/snake/skins.js';
+import { addPlayer, createWorld, removePlayer, respawnPlayer, step, tickDuration } from '../resources/js/snake/world.js';
 
 /**
  * The online game: one shared board with the bots, which everyone who connects plays on.
@@ -13,11 +14,10 @@ import { addPlayer, createWorld, isReverse, removePlayer, respawnPlayer, step, t
  * board to every player after each move. Start it with `npm run multiplayer`.
  */
 const port = Number(process.env.PORT) || MULTIPLAYER_PORT;
-const MAX_QUEUED_TURNS = 2;
 const MAX_NAME_LENGTH = 20;
 
 const world = createWorld(Math.random, { multiplayer: true });
-/** socket => { snake, turns } for everyone who has joined. */
+/** socket => { snake, angle } for everyone who has joined; `angle` is where they last steered. */
 const players = new Map();
 
 const http = createServer((request, response) => {
@@ -55,26 +55,26 @@ function handle(socket, message) {
             return;
         }
         const name = String(message.name ?? '').trim().slice(0, MAX_NAME_LENGTH) || 'Player';
-        const snake = addPlayer(world, { name, color: nextColor() });
-        players.set(socket, { snake, turns: [] });
+        const skin = skinById(isSkin(message.skin) ? message.skin : unusedSkin());
+        const snake = addPlayer(world, { name, color: skin.color, skin: skin.id });
+        players.set(socket, { snake, angle: null });
         send(socket, { type: 'welcome', id: snake.id });
         log(`${name} joined (${players.size} playing)`);
-    } else if (message.type === 'turn' && player && DIRECTIONS[message.dir]) {
-        const direction = DIRECTIONS[message.dir];
-        const previous = player.turns.at(-1) ?? player.snake.dir;
-        if (direction !== previous && !isReverse(direction, previous) && player.turns.length < MAX_QUEUED_TURNS) {
-            player.turns.push(direction);
-        }
+    } else if (message.type === 'steer' && player && Number.isFinite(message.angle)) {
+        player.angle = message.angle;
+    } else if (message.type === 'turn' && player && Object.hasOwn(DIRECTION_ANGLES, message.dir)) {
+        // Apps from before worms could glide at any angle steer up, down, left or right.
+        player.angle = DIRECTION_ANGLES[message.dir];
     } else if (message.type === 'respawn' && player && !player.snake.alive) {
-        player.turns = [];
+        player.angle = null;
         respawnPlayer(world, player.snake);
     }
 }
 
-/** The first player color nobody is using yet. */
-function nextColor() {
-    const used = new Set([...players.values()].map((player) => player.snake.color));
-    return PLAYER_COLORS.find((color) => !used.has(color)) ?? PLAYER_COLORS[players.size % PLAYER_COLORS.length];
+/** For a game that didn't pick a skin (an older app): the first one no player is wearing yet. */
+function unusedSkin() {
+    const used = new Set([...players.values()].map((player) => player.snake.skin));
+    return (SKINS.find((skin) => !used.has(skin.id)) ?? SKINS[players.size % SKINS.length]).id;
 }
 
 function send(socket, message) {
@@ -84,16 +84,15 @@ function send(socket, message) {
 }
 
 /**
- * One move for everyone, then the new board to every player. The next move is scheduled
- * after this one's duration, which slow-mo can stretch.
+ * One step for everyone, steering each player where they last pointed, then the new board to
+ * every player.
  */
 function tick() {
     const duration = tickDuration(world);
     const turns = {};
     for (const player of players.values()) {
-        const turn = player.turns.shift();
-        if (turn) {
-            turns[player.snake.id] = turn;
+        if (player.angle !== null) {
+            turns[player.snake.id] = player.angle;
         }
     }
 

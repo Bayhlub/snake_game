@@ -1,20 +1,19 @@
 import { createRenderer } from './renderer';
 import {
     BOTS,
-    DIRECTIONS,
+    DIRECTION_ANGLES,
     activePowerUps,
+    clampZoom,
     connectOnline,
     createWorld,
     describeBotCrash,
-    directionName,
-    directionToward,
     getPlayer,
-    isReverse,
+    skinById,
     step,
+    stickVector,
     tickDuration,
+    wrapAngle,
 } from './shared';
-
-const MAX_QUEUED_TURNS = 3;
 
 /**
  * The game loop and controls from resources/js/snake/main.js, without the DOM.
@@ -22,19 +21,28 @@ const MAX_QUEUED_TURNS = 3;
  * onChange reports the HUD and game state whenever they change.
  * `translate()` returns the current language's translate function, so messages follow a language switch.
  * `shape` ({ cols, rows }) is the field size for new games: upright when the phone is held upright.
+ * `skin` is the worm skin you play with, `zoom` how far the camera zooms in on your worm while you play.
  *
  * Solo, the whole game runs here. Online (joinOnline), the multiplayer server runs it and this
  * draws what the server sends and passes the player's turns back.
  */
-export function createGame({ sound, translate, shape: initialShape, best: initialBest = 0, onChange, onMessage, onNewBest }) {
+export function createGame({ sound, translate, shape: initialShape, skin: initialSkin, zoom: initialZoom, best: initialBest = 0, onChange, onMessage, onNewBest }) {
     const t = (key, params) => translate()(key, params);
     const powerUpName = (powerUp) => t(`powerUp.${powerUp.type}`);
     const renderer = createRenderer({ label: powerUpName, youLabel: () => t('youTag') });
     let shape = initialShape;
-    let world = createWorld(Math.random, shape);
+    let skin = skinById(initialSkin).id;
+    let zoom = clampZoom(initialZoom);
+    const newWorld = () => createWorld(Math.random, { ...shape, skin });
+    let world = newWorld();
     let status = 'ready';
-    let turnQueue = [];
-    let pointerTarget = null;
+    /** An arrow button pressed since the last step: the worm turns to head that way. */
+    let keyTurn = null;
+    /**
+     * The touch joystick, like Worms Zone: where the finger went down (`base`) and where it is now
+     * (`knob`), as fractions of the board's size. Null when no finger is down.
+     */
+    let stick = null;
     let accumulated = 0;
     let lastFrame = performance.now();
     let best = initialBest;
@@ -60,6 +68,8 @@ export function createGame({ sound, translate, shape: initialShape, best: initia
             best: Math.max(best, points),
             bots: `${others.filter((snake) => snake.alive).length}/${online ? others.length : BOTS.length}`,
             powerUps: status === 'over' || !player ? [] : activePowerUps(shown, player),
+            following: isFollowing(),
+            skin,
             players: online
                 ? shown.snakes
                       .filter((snake) => snake.isPlayer)
@@ -72,17 +82,23 @@ export function createGame({ sound, translate, shape: initialShape, best: initia
 
     const emit = () => onChange(snapshot());
 
+    /** The camera follows your worm (and zoom works) while a game is going. */
+    function isFollowing() {
+        return status === 'playing' || (status === 'paused' && !online);
+    }
+
     function newGame() {
         result = null;
-        pointerTarget = null;
+        stopSteering();
         if (online) {
             online.connection.send({ type: 'respawn' });
+            online.sentAngle = null;
             status = 'playing';
             emit();
             return;
         }
-        world = createWorld(Math.random, shape);
-        turnQueue = [];
+        world = newWorld();
+        keyTurn = null;
         accumulated = 0;
         status = 'playing';
         emit();
@@ -103,10 +119,10 @@ export function createGame({ sound, translate, shape: initialShape, best: initia
     }
 
     function queueTurn(name) {
-        pointerTarget = null;
+        stopSteering();
         if (online) {
             if (status === 'playing') {
-                online.connection.send({ type: 'turn', dir: name });
+                sendSteer(DIRECTION_ANGLES[name], true);
             }
             return;
         }
@@ -117,12 +133,50 @@ export function createGame({ sound, translate, shape: initialShape, best: initia
             return;
         }
 
-        const direction = DIRECTIONS[name];
-        const previous = turnQueue.at(-1) ?? getPlayer(world).dir;
-        if (direction === previous || isReverse(direction, previous) || turnQueue.length >= MAX_QUEUED_TURNS) {
-            return;
+        keyTurn = DIRECTION_ANGLES[name];
+    }
+
+    /**
+     * Online: tell the server where the worm should head, when that has changed (or `always`).
+     */
+    function sendSteer(angle, always = false) {
+        if (always || online.sentAngle === null || Math.abs(wrapAngle(angle - online.sentAngle)) > 0.02) {
+            online.connection.send({ type: 'steer', angle: Math.round(angle * 1000) / 1000 });
+            online.sentAngle = angle;
         }
-        turnQueue.push(direction);
+    }
+
+    function stopSteering() {
+        stick = null;
+    }
+
+    /** Which way the joystick points, in cells; null when not steering (the worm keeps going straight). */
+    function steerVector(snake) {
+        if (status !== 'playing' || !snake?.alive || !stick) {
+            return null;
+        }
+        return stickVector(stick, shownWorld().cols, shownWorld().rows);
+    }
+
+    /** The heading (radians) to steer toward for the joystick, or null to keep going. */
+    function steerTurn(snake) {
+        const vector = steerVector(snake);
+        return vector ? Math.atan2(vector.y, vector.x) : null;
+    }
+
+    /**
+     * Draw a frame, with the joystick, the arrow in front of the worm, and the worm's eyes looking
+     * the way it's steered.
+     */
+    function draw(shown, snake, now, progress, width, height) {
+        const aim = steerVector(snake);
+        const lookAt = aim ? { x: snake.body[0].x + aim.x, y: snake.body[0].y + aim.y } : null;
+        return renderer.draw(shown, now, progress, lookAt, width, height, {
+            zoom,
+            follow: isFollowing(),
+            aim,
+            stick: status === 'playing' ? stick : null,
+        });
     }
 
     function handleEvents(events, effectDelayMs) {
@@ -169,11 +223,12 @@ export function createGame({ sound, translate, shape: initialShape, best: initia
      */
     function joinOnline(url, name, onDone) {
         const connection = connectOnline(url, name, {
+            skin,
             onJoined(remote) {
-                online = { connection, world: remote, lastStateAt: performance.now(), lastLength: remote.me().body.length };
+                online = { connection, world: remote, lastStateAt: performance.now(), lastLength: remote.me().body.length, sentAngle: null };
                 status = 'playing';
                 result = null;
-                pointerTarget = null;
+                stopSteering();
                 onDone(null);
                 emit();
             },
@@ -189,11 +244,9 @@ export function createGame({ sound, translate, shape: initialShape, best: initia
                 if (player?.alive) {
                     online.lastLength = player.body.length;
                 }
-                if (status === 'playing' && pointerTarget && player?.alive) {
-                    const turn = directionToward(player, pointerTarget, remote);
-                    if (turn) {
-                        connection.send({ type: 'turn', dir: directionName(turn) });
-                    }
+                const angle = player?.alive ? steerTurn(player) : null;
+                if (angle !== null) {
+                    sendSteer(angle);
                 }
                 emit();
             },
@@ -208,10 +261,10 @@ export function createGame({ sound, translate, shape: initialShape, best: initia
     function leaveOnline() {
         online?.connection.leave();
         online = null;
-        world = createWorld(Math.random, shape);
+        world = newWorld();
         status = 'ready';
         result = null;
-        pointerTarget = null;
+        stopSteering();
         emit();
     }
 
@@ -227,17 +280,40 @@ export function createGame({ sound, translate, shape: initialShape, best: initia
             }
             shape = next;
             if (status === 'ready' && !online) {
-                world = createWorld(Math.random, shape);
+                world = newWorld();
                 emit();
             }
+        },
+
+        /** Wear another skin; before a game starts, the waiting worm changes right away. */
+        setSkin(id) {
+            skin = skinById(id).id;
+            if (status === 'ready' && !online) {
+                world = newWorld();
+            }
+            emit();
+        },
+
+        get zoom() {
+            return zoom;
+        },
+        setZoom(next) {
+            zoom = clampZoom(next);
         },
         pause: () => setPaused(true),
         resume: () => setPaused(false),
         queueTurn,
 
-        /** Steer toward a board cell while a finger is down; null when it lifts. */
-        steerTo(cell) {
-            pointerTarget = cell;
+        /**
+         * Steer with the touch joystick while a finger is down: `{ base, knob }`, each a spot on the
+         * board as fractions (0–1) of its width and height. Null when the finger lifts.
+         */
+        steerStick(next) {
+            if (next) {
+                stick = next;
+            } else {
+                stopSteering();
+            }
         },
 
         frame(now, width, height) {
@@ -246,7 +322,7 @@ export function createGame({ sound, translate, shape: initialShape, best: initia
 
             if (online) {
                 const progress = Math.min((now - online.lastStateAt) / online.world.tickMs, 1);
-                return renderer.draw(online.world, now, progress, status === 'playing' ? pointerTarget : null, width, height);
+                return draw(online.world, online.world.me(), now, progress, width, height);
             }
 
             if (status === 'playing') {
@@ -255,7 +331,8 @@ export function createGame({ sound, translate, shape: initialShape, best: initia
 
                 while (accumulated >= duration && status === 'playing') {
                     accumulated -= duration;
-                    const turn = turnQueue.shift() ?? (pointerTarget && directionToward(getPlayer(world), pointerTarget, world));
+                    const turn = keyTurn ?? steerTurn(getPlayer(world));
+                    keyTurn = null;
                     handleEvents(step(world, turn, duration), duration - accumulated);
                     if (world.over) {
                         gameOver({ points: world.points, length: getPlayer(world).body.length, cause: world.deathCause });
@@ -267,7 +344,7 @@ export function createGame({ sound, translate, shape: initialShape, best: initia
 
             const isMoving = status === 'playing' || status === 'paused';
             const progress = isMoving ? Math.min(accumulated / tickDuration(world), 1) : 1;
-            return renderer.draw(world, now, progress, status === 'playing' ? pointerTarget : null, width, height);
+            return draw(world, getPlayer(world), now, progress, width, height);
         },
 
         snapshot,

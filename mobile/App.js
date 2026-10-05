@@ -14,13 +14,24 @@ import { Leaderboard, OnlinePlayers } from './src/components/Leaderboard';
 import { GameOverOverlay, JoinOverlay, PauseOverlay, StartOverlay } from './src/components/Overlays';
 import { Button, LanguageSwitch } from './src/components/Ui';
 import { createGame } from './src/game/controller';
-import { COLS, LANGUAGES, MULTIPLAYER_PORT, ROWS, pickLanguage, translator } from './src/game/shared';
+import { COLS, DEFAULT_SKIN, DEFAULT_ZOOM, LANGUAGES, MULTIPLAYER_PORT, ROWS, pickLanguage, translator } from './src/game/shared';
 import { createSound } from './src/game/sound';
 import { colors, fonts } from './src/theme';
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
-const STORAGE_KEYS = { best: 'snake.best', muted: 'snake.muted', name: 'snake.name', language: 'snake.lang', server: 'snake.server' };
+/** The online game server this app was built with (EXPO_PUBLIC_MULTIPLAYER_URL). With one, players never type an address. */
+const BUILT_IN_SERVER = process.env.EXPO_PUBLIC_MULTIPLAYER_URL ?? '';
+
+const STORAGE_KEYS = {
+    best: 'snake.best',
+    muted: 'snake.muted',
+    name: 'snake.name',
+    language: 'snake.lang',
+    server: 'snake.server',
+    skin: 'snake.skin',
+    zoom: 'snake.zoom',
+};
 
 function deviceLanguages() {
     try {
@@ -44,8 +55,10 @@ export default function App() {
                     muted: values[STORAGE_KEYS.muted] === '1',
                     name: values[STORAGE_KEYS.name] ?? '',
                     language: pickLanguage(values[STORAGE_KEYS.language], deviceLanguages()),
-                    // The last server joined, or the one this app was built with (EXPO_PUBLIC_MULTIPLAYER_URL).
-                    server: values[STORAGE_KEYS.server] ?? process.env.EXPO_PUBLIC_MULTIPLAYER_URL ?? '',
+                    // The server this app was built with; without one, the last server typed in.
+                    server: BUILT_IN_SERVER || (values[STORAGE_KEYS.server] ?? ''),
+                    skin: values[STORAGE_KEYS.skin] ?? DEFAULT_SKIN,
+                    zoom: Number(values[STORAGE_KEYS.zoom]) || DEFAULT_ZOOM,
                 }),
             );
     }, []);
@@ -100,6 +113,8 @@ function GameScreen({ saved }) {
             sound: soundRef.current,
             translate: () => translateRef.current,
             shape,
+            skin: saved.skin,
+            zoom: saved.zoom,
             best: saved.best,
             onChange: setHud,
             onMessage: (text) => {
@@ -151,6 +166,13 @@ function GameScreen({ saved }) {
         game.start();
     };
 
+    const changeSkin = (id) => {
+        game.setSkin(id);
+        AsyncStorage.setItem(STORAGE_KEYS.skin, id).catch(() => {});
+    };
+
+    const rememberZoom = (zoom) => AsyncStorage.setItem(STORAGE_KEYS.zoom, zoom.toFixed(2)).catch(() => {});
+
     const changeLanguage = (code) => {
         setLanguage(code);
         AsyncStorage.setItem(STORAGE_KEYS.language, code).catch(() => {});
@@ -179,7 +201,9 @@ function GameScreen({ saved }) {
             return;
         }
         AsyncStorage.setItem(STORAGE_KEYS.name, trimmedName).catch(() => {});
-        AsyncStorage.setItem(STORAGE_KEYS.server, server.trim()).catch(() => {});
+        if (!BUILT_IN_SERVER) {
+            AsyncStorage.setItem(STORAGE_KEYS.server, server.trim()).catch(() => {});
+        }
         setJoining(true);
         setJoinStatus('connecting');
         game.joinOnline(serverUrl(server), trimmedName, (reason) => {
@@ -247,10 +271,15 @@ function GameScreen({ saved }) {
                 rows={state.rows}
                 label={t('boardLabel')}
                 steerable={state.status === 'playing'}
+                zoomable={state.following}
+                zoomLabels={{ zoomIn: t('zoomIn'), zoomOut: t('zoomOut') }}
+                onZoom={rememberZoom}
             >
                 {state.status === 'ready' && !joinOpen && (
                     <StartOverlay
                         t={t}
+                        skin={state.skin}
+                        onChangeSkin={changeSkin}
                         onStart={start}
                         onPlayOnline={() => {
                             setJoinStatus(null);
@@ -263,7 +292,7 @@ function GameScreen({ saved }) {
                         t={t}
                         name={name}
                         onChangeName={setName}
-                        server={server}
+                        server={BUILT_IN_SERVER ? null : server}
                         onChangeServer={setServer}
                         onJoin={joinOnline}
                         joining={joining}
@@ -299,7 +328,7 @@ function GameScreen({ saved }) {
     const header = (
         <View style={styles.header}>
             <View style={styles.titleRow}>
-                <Text style={styles.titleEmoji}>🐍</Text>
+                <Text style={styles.titleEmoji}>🪱</Text>
                 <Text style={styles.title}>{t('title')}</Text>
             </View>
             <View style={styles.headerButtons}>
@@ -311,7 +340,11 @@ function GameScreen({ saved }) {
         </View>
     );
 
-    const hint = <Text style={styles.hint}>{t('steerTouch')}</Text>;
+    const hint = (
+        <Text style={styles.hint}>
+            {t('steerTouch')} {t('zoomHintTouch')}
+        </Text>
+    );
     const hudRow = <Hud t={t} points={state.points} length={state.length} best={state.best} bots={state.bots} />;
     const leaderboard = (
         <>

@@ -1,20 +1,44 @@
-import { BlurStyle, PaintStyle, Skia, StrokeCap, StrokeJoin, TextAlign, TileMode } from '@shopify/react-native-skia';
+import { BlurStyle, ClipOp, FilterMode, MipmapMode, PaintStyle, Skia, StrokeCap, StrokeJoin, TextAlign, TileMode } from '@shopify/react-native-skia';
 
-import { CELL, isEffectActive } from './shared';
+import {
+    CELL,
+    DEAD_SKIN,
+    FLOOR_COLOR,
+    FLOOR_TILE,
+    VOID_COLOR,
+    bodyBeads,
+    bodyRadius,
+    createCamera,
+    decorationSpots,
+    floorChips,
+    foodColor,
+    foodRadius,
+    STEER_COLOR,
+    STEER_OUTLINE,
+    aimArrow,
+    gearCorners,
+    headRadius,
+    isEffectActive,
+    pointAt,
+    shade,
+    skinOf,
+    starCorners,
+    stickShape,
+    stripeColor,
+    updateCamera,
+    viewRect,
+} from './shared';
 
 // A Skia port of resources/js/snake/renderer.js. Drawing happens in board units (CELL px per cell)
 // and is scaled to whatever size the board has on screen. The field can be wide or upright.
-const FOOD_COLOR = '#facc15';
-const FOOD_CORE = '#fef9c3';
-const DEAD_COLOR = '#6b7280';
-const TONGUE_COLOR = '#f43f5e';
 const SHIELD_COLOR = '#38bdf8';
 const MAGNET_COLOR = '#f472b6';
 const SLOW_TINT = '#8b5cf6';
-const FIREFLIES = 14;
 const YOU_COLOR = '#4ade80';
 /** How long the rings around the player's head pulse at the start of a game. */
 const INTRO_MS = 3500;
+/** The floor tile is rasterized once at this many pixels per board pixel: sharp enough when zoomed in. */
+const FLOOR_SHARPNESS = 3;
 
 const fill = Skia.Paint();
 fill.setAntiAlias(true);
@@ -27,6 +51,7 @@ stroke.setStrokeJoin(StrokeJoin.Round);
 function paint(base, color, alpha = 1) {
     base.setShader(null);
     base.setMaskFilter(null);
+    base.setPathEffect(null);
     base.setColor(Skia.Color(color));
     base.setAlphaf(Math.max(0, Math.min(1, alpha)));
     return base;
@@ -68,19 +93,25 @@ function radial(x0, y0, r0, x1, y1, r1, colors, positions = null) {
     );
 }
 
+function polygonPath(corners, dx = 0, dy = 0) {
+    const path = Skia.PathBuilder.Make();
+    corners.forEach(([x, y], i) => (i ? path.lineTo(x + dx, y + dy) : path.moveTo(x + dx, y + dy)));
+    path.close();
+    return path.build();
+}
+
 /**
  * `label(powerUp)` gives a power-up's name in the player's language.
+ *
+ * A camera follows your worm while you play (`follow`), zoomed in by `zoom`; otherwise it shows the
+ * whole field. `pointAt(fx, fy)` turns a spot on the board (as fractions of its size) into a spot on the field.
+ * While you steer, `aim` (which way, in cells) puts an arrow in front of your worm and `stick` draws
+ * the touch joystick. `target` is a cell your worm's eyes look at.
  */
 export function createRenderer({ label = (powerUp) => powerUp.label, youLabel = () => 'YOU' } = {}) {
-    const backdrops = new Map();
-    /** The grass and vignette are drawn once per field shape. */
-    function backdrop(cols, rows) {
-        const key = `${cols}x${rows}`;
-        if (!backdrops.has(key)) {
-            backdrops.set(key, { board: drawBoard(cols, rows), vignette: drawVignette(cols, rows) });
-        }
-        return backdrops.get(key);
-    }
+    const floor = makeFloorShader();
+    const camera = createCamera();
+    let shownShape = { cols: 1, rows: 1 };
     const foodBornAt = new WeakMap();
     const paragraphs = new Map();
     let pending = [];
@@ -123,7 +154,7 @@ export function createRenderer({ label = (powerUp) => powerUp.label, youLabel = 
         const y = (event.at?.y ?? event.food.y) * CELL + CELL / 2;
 
         if (event.type === 'eat') {
-            burst(x, y, event.food.kind === 'drop' ? event.food.color : FOOD_COLOR, event.snake.isPlayer ? 10 : 5, 60);
+            burst(x, y, foodColor(event.food), event.snake.isPlayer ? 10 : 5, 60);
             if (event.snake.isPlayer) {
                 popups.push({ x, y, text: `+${event.food.points}`, color: '#fef08a', life: 1 });
             }
@@ -145,7 +176,10 @@ export function createRenderer({ label = (powerUp) => powerUp.label, youLabel = 
             startShake(now, 5, 320);
             startFlash(now, SHIELD_COLOR, 0.25, 300);
         } else {
-            burst(x, y, event.snake.color, 28, 130);
+            const skin = skinOf(event.snake);
+            for (const color of new Set(skin.stripes)) {
+                burst(x, y, color, Math.ceil(28 / skin.stripes.length), 130);
+            }
             burst(x, y, '#ffffff', 8, 80);
             if (event.type === 'playerDied') {
                 startShake(now, 8, 480);
@@ -241,14 +275,15 @@ export function createRenderer({ label = (powerUp) => powerUp.label, youLabel = 
             return;
         }
 
-        const color = food.kind === 'drop' ? food.color : FOOD_COLOR;
-        const size = (food.kind === 'drop' ? 0.2 : 0.26) * CELL * grow;
-        const pulse = 1 + Math.sin(now / 250 + food.x * 3 + food.y) * 0.15;
+        // A glowing candy dot: a soft halo, a bright ball and a little shine.
+        const color = foodColor(food);
+        const size = foodRadius(food) * grow;
+        const pulse = 1 + Math.sin(now / 250 + food.x * 3 + food.y) * 0.18;
 
-        circle(canvas, cx, cy, size * 2.4 * pulse, color, 0.18);
-        const gradient = paint(fill, '#ffffff');
-        gradient.setShader(radial(cx - size * 0.35, cy - size * 0.35, 0.5, cx, cy, size, [FOOD_CORE, color]));
-        canvas.drawCircle(cx, cy, size, gradient);
+        circle(canvas, cx, cy, size * 2.8 * pulse, color, 0.16);
+        circle(canvas, cx, cy, size * 1.7 * pulse, color, 0.3);
+        circle(canvas, cx, cy, size, color);
+        circle(canvas, cx - size * 0.3, cy - size * 0.3, size * 0.38, '#ffffff', 0.75);
     }
 
     /**
@@ -264,7 +299,7 @@ export function createRenderer({ label = (powerUp) => powerUp.label, youLabel = 
         const y = cy + bob;
 
         circle(canvas, cx, y, CELL * 1.05 * pulse * grow, color, 0.28);
-        circle(canvas, cx, y, CELL * 0.5 * grow, '#0b1712', 0.9);
+        circle(canvas, cx, y, CELL * 0.5 * grow, '#111118', 0.9);
 
         const spin = now / 380;
         for (const offset of [0, Math.PI]) {
@@ -281,16 +316,12 @@ export function createRenderer({ label = (powerUp) => powerUp.label, youLabel = 
     }
 
     /**
-     * The player, plus whichever power-ups are running: see-through as a ghost (or blinking
-     * just after a shield broke), a bubble for the shield, and pulses for the magnet.
-     */
-    /**
      * A name tag pointing at a player's head (below it when the head is near the top wall): "YOU" on
-     * your own snake, the player's name on others. Yours also pulses rings for a few seconds after it appears.
+     * your own snake, the player's name on others; below the head when `putBelow`. Yours also pulses rings for a few seconds after it appears.
      */
-    function drawNameTag(canvas, world, snake, head, text, now, isMe) {
+    function drawNameTag(canvas, world, snake, head, text, now, isMe, putBelow = false) {
         const intro = isMe ? Math.max(0, 1 - (world.time - (snake.spawnedAt ?? 0)) / INTRO_MS) : 0;
-        const tagColor = isMe && !world.multiplayer ? YOU_COLOR : snake.color;
+        const tagColor = isMe && !world.multiplayer ? YOU_COLOR : skinOf(snake).color;
         const width = world.cols * CELL;
 
         for (let i = 0; intro > 0 && i < 2; i++) {
@@ -298,12 +329,12 @@ export function createRenderer({ label = (powerUp) => powerUp.label, youLabel = 
             ring(canvas, head.x, head.y, CELL * (0.9 + t * 2.4), line(tagColor, 2.5, intro * (1 - t) * 0.85));
         }
 
-        const para = paragraph(text, CELL * 0.95, '#dcfce7');
+        const para = paragraph(text, CELL * 0.95, '#ffffff');
         const tagWidth = (para ? para.getMaxIntrinsicWidth() : CELL * 1.5) + CELL;
         const tagHeight = CELL * 1.3;
-        const below = head.y < CELL * 2.6;
+        const below = putBelow || head.y < CELL * 2.6;
         const bounce = Math.sin(now / 160) * 2.5 * intro;
-        const cy = head.y + (below ? CELL * 1.6 : -CELL * 1.6) + bounce * (below ? 1 : -1);
+        const cy = head.y + (below ? CELL * 1.7 : -CELL * 1.7) + bounce * (below ? 1 : -1);
         const cx = Math.min(Math.max(head.x, tagWidth / 2 + 2), width - tagWidth / 2 - 2);
         const edgeY = below ? cy - tagHeight / 2 : cy + tagHeight / 2;
         const tipY = below ? edgeY - 4 : edgeY + 4;
@@ -314,7 +345,7 @@ export function createRenderer({ label = (powerUp) => powerUp.label, youLabel = 
         shape.lineTo(head.x, tipY);
         shape.lineTo(head.x + 4, edgeY);
         const outline = shape.build();
-        canvas.drawPath(outline, paint(fill, '#052e16', 0.92));
+        canvas.drawPath(outline, paint(fill, '#111118', 0.92));
         canvas.drawPath(outline, line(tagColor, 1.5));
 
         if (para) {
@@ -322,7 +353,11 @@ export function createRenderer({ label = (powerUp) => powerUp.label, youLabel = 
         }
     }
 
-    function drawPlayer(canvas, world, player, points, now, lookAt) {
+    /**
+     * The player, plus whichever power-ups are running: see-through as a ghost (or blinking
+     * just after a shield broke), a bubble for the shield, and pulses for the magnet.
+     */
+    function drawPlayer(canvas, world, player, points, now, lookAt, isMe) {
         if (!points.length) {
             return;
         }
@@ -343,10 +378,17 @@ export function createRenderer({ label = (powerUp) => powerUp.label, youLabel = 
             opacity = Math.floor(now / 90) % 2 ? 0.35 : 0.9;
         }
 
-        drawSnake(canvas, player, points, alive ? player.color : DEAD_COLOR, now, lookAt, opacity);
+        // See-through worms go through a layer, so the overlapping beads don't show through each other.
+        if (opacity < 1) {
+            canvas.saveLayer(paint(fill, '#000000', opacity));
+        }
+        drawWorm(canvas, player, points, { now, lookAt, dead: !alive, glow: isMe && alive });
+        if (opacity < 1) {
+            canvas.restore();
+        }
 
         if (alive && isEffectActive(world, 'shield', player)) {
-            const radius = CELL * 0.95 * (1 + Math.sin(now / 220) * 0.06);
+            const radius = CELL * 1.05 * (1 + Math.sin(now / 220) * 0.06);
             const bubble = paint(fill, '#ffffff');
             bubble.setShader(
                 radial(head.x - radius * 0.3, head.y - radius * 0.3, 1, head.x, head.y, radius, [
@@ -374,11 +416,17 @@ export function createRenderer({ label = (powerUp) => powerUp.label, youLabel = 
             pending.push({ event, runAt: performance.now() + (isInstant ? 0 : delayMs) });
         },
 
+        /** The spot on the field under a spot on the board, given as fractions (0–1) of its width and height. */
+        pointAt(fx, fy) {
+            return pointAt(camera, shownShape.cols, shownShape.rows, fx, fy);
+        },
+
         /**
          * Record one frame as a Skia picture sized to the board on screen.
          */
-        draw(world, now, progress, target, width, height) {
-            const elapsed = Math.min((now - lastNow) / 1000, 0.1);
+        draw(world, now, progress, target, width, height, { zoom = 1, follow = false, aim = null, stick = null } = {}) {
+            const elapsedMs = Math.min(now - lastNow, 100);
+            const elapsed = elapsedMs / 1000;
             lastNow = now;
 
             pending = pending.filter((effect) => {
@@ -392,55 +440,70 @@ export function createRenderer({ label = (powerUp) => powerUp.label, youLabel = 
             // Solo there is one player; online, `meId` says which of the players is on this device.
             const players = world.snakes.filter((snake) => snake.isPlayer);
             const me = world.meId != null ? players.find((snake) => snake.id === world.meId) : players[0];
+            const points = new Map(world.snakes.map((snake) => [snake, snakePoints(snake, progress)]));
 
             const WIDTH = world.cols * CELL;
             const HEIGHT = world.rows * CELL;
-            const { board, vignette } = backdrop(world.cols, world.rows);
+            if (world.cols !== shownShape.cols || world.rows !== shownShape.rows) {
+                // A new field shape (the phone turned): start the camera over.
+                shownShape = { cols: world.cols, rows: world.rows };
+                camera.x = null;
+            }
+            const focus = follow && me?.alive ? points.get(me)[0] : null;
+            updateCamera(camera, { width: WIDTH, height: HEIGHT, focus, zoom, elapsedMs });
+            const view = viewRect(camera, WIDTH, HEIGHT);
+            const isVisible = (x, y, margin = CELL * 2) =>
+                x > view.left - margin && x < view.left + view.width + margin && y > view.top - margin && y < view.top + view.height + margin;
 
             const recorder = Skia.PictureRecorder();
             const canvas = recorder.beginRecording(Skia.XYWHRect(0, 0, width, height));
             canvas.scale(width / WIDTH, height / HEIGHT);
-            canvas.drawRect(Skia.XYWHRect(0, 0, WIDTH, HEIGHT), paint(fill, '#07100c'));
+            canvas.drawRect(Skia.XYWHRect(0, 0, WIDTH, HEIGHT), paint(fill, VOID_COLOR));
 
             canvas.save();
             if (now < shake.until) {
                 const strength = shake.magnitude * ((shake.until - now) / shake.duration);
                 canvas.translate((Math.random() * 2 - 1) * strength, (Math.random() * 2 - 1) * strength);
             }
+            canvas.scale(camera.zoom, camera.zoom);
+            canvas.translate(-view.left, -view.top);
 
-            canvas.drawPicture(board);
-            drawFireflies(canvas, now, WIDTH, HEIGHT);
+            const floorPaint = paint(fill, FLOOR_COLOR);
+            floorPaint.setShader(floor);
+            canvas.drawRect(Skia.XYWHRect(0, 0, WIDTH, HEIGHT), floorPaint);
+            drawWall(canvas, WIDTH, HEIGHT);
 
             for (const food of [...world.foods, ...soonEaten]) {
                 if (!foodBornAt.has(food)) {
                     foodBornAt.set(food, now);
                 }
-                drawFood(canvas, food, world, now, now - foodBornAt.get(food), progress);
-            }
-
-            if (target) {
-                drawTarget(canvas, target, now);
+                if (isVisible(food.x * CELL, food.y * CELL)) {
+                    drawFood(canvas, food, world, now, now - foodBornAt.get(food), progress);
+                }
             }
 
             const lookAt = (snake) => nearestFood(world, snake, snake === me ? target : null);
-            for (const snake of world.snakes) {
-                if (snake.body.length) {
-                    drawShadow(canvas, snakePoints(snake, progress));
+            const shown = world.snakes.filter((snake) => points.get(snake).some((point) => isVisible(point.x, point.y)));
+            for (const snake of shown) {
+                drawShadow(canvas, points.get(snake));
+            }
+            for (const snake of shown) {
+                if (!snake.isPlayer) {
+                    drawWorm(canvas, snake, points.get(snake), { now, lookAt: lookAt(snake), dead: false, glow: false });
                 }
             }
-            for (const snake of world.snakes) {
-                if (!snake.isPlayer && snake.body.length) {
-                    drawSnake(canvas, snake, snakePoints(snake, progress), snake.color, now, lookAt(snake));
-                }
-            }
-            // Everyone else first, so your own snake and tag are always on top.
+            // Everyone else first, so your own worm and tag are always on top.
             for (const player of [...players.filter((snake) => snake !== me), ...(me ? [me] : [])]) {
-                const points = snakePoints(player, progress);
-                drawPlayer(canvas, world, player, points, now, lookAt(player));
-                if (player.alive && points.length) {
-                    const isMe = player === me;
-                    drawNameTag(canvas, world, player, points[0], isMe ? youLabel() : player.name, now, isMe);
+                const playerPoints = points.get(player);
+                const isMe = player === me;
+                drawPlayer(canvas, world, player, playerPoints, now, lookAt(player), isMe);
+                if (player.alive && playerPoints.length) {
+                    // While you steer upward, your tag moves below your worm so it doesn't hide the arrow.
+                    drawNameTag(canvas, world, player, playerPoints[0], isMe ? youLabel() : player.name, now, isMe, isMe && aim !== null && aim.y < 0);
                 }
+            }
+            if (aim && me?.alive) {
+                drawAim(canvas, aimArrow(points.get(me)[0], aim, me.body.length));
             }
 
             particles = particles.filter((particle) => {
@@ -479,7 +542,16 @@ export function createRenderer({ label = (powerUp) => powerUp.label, youLabel = 
             if (players.some((player) => isEffectActive(world, 'slow', player))) {
                 canvas.drawRect(Skia.XYWHRect(0, 0, WIDTH, HEIGHT), paint(fill, SLOW_TINT, 0.12 + Math.sin(now / 400) * 0.03));
             }
-            canvas.drawPicture(vignette);
+            drawVignette(canvas, WIDTH, HEIGHT);
+
+            const mapOpacity = Math.min(1, (camera.zoom - 1) * 3);
+            if (mapOpacity > 0.02) {
+                drawMinimap(canvas, world, points, me, view, WIDTH, HEIGHT, mapOpacity);
+            }
+
+            if (stick) {
+                drawStick(canvas, stickShape(stick, WIDTH, HEIGHT));
+            }
 
             if (now < flash.until) {
                 canvas.drawRect(Skia.XYWHRect(0, 0, WIDTH, HEIGHT), paint(fill, flash.color, flash.strength * ((flash.until - now) / flash.duration)));
@@ -488,6 +560,19 @@ export function createRenderer({ label = (powerUp) => powerUp.label, youLabel = 
             return recorder.finishRecordingAsPicture();
         },
     };
+}
+
+/**
+ * A little picture of a skin for the skin picker: a short wavy worm looking to the right,
+ * `width` × `height` on screen.
+ */
+export function skinPreview(skin, width, height) {
+    const recorder = Skia.PictureRecorder();
+    const canvas = recorder.beginRecording(Skia.XYWHRect(0, 0, width, height));
+    canvas.scale(width / 132, height / 44);
+    const points = Array.from({ length: 8 }, (_, i) => ({ x: 112 - i * 13, y: 22 + Math.sin(i * 0.95) * 5 }));
+    drawWorm(canvas, { id: 1, skin: skin.id, color: skin.color, dir: { x: 1, y: 0 } }, points, { now: 0, lookAt: null, dead: false, glow: false });
+    return recorder.finishRecordingAsPicture();
 }
 
 /**
@@ -528,145 +613,136 @@ function nearestFood(world, snake, target) {
     return best;
 }
 
-/**
- * Body thickness: full near the head, thinner toward the tail, with a pointed tip.
- */
-function segmentRadius(i, length) {
-    const base = CELL * 0.44 * (1 - (i / Math.max(length, 6)) * 0.45);
-    const tip = i === length - 1 ? 0.5 : i === length - 2 ? 0.78 : 1;
-    return base * tip;
-}
-
 function drawShadow(canvas, points) {
-    canvas.save();
-    canvas.translate(2, 4);
-    strokeLine(canvas, points, segmentRadius(points.length / 2, points.length) * 2, '#000000', 0.3);
-    canvas.restore();
-}
-
-function drawSnake(canvas, snake, points, color, now, lookAt, opacity = 1) {
-    if (!points.length) {
-        return;
-    }
-
-    const outline = mix(color, '#000000', 0.62);
-    const dark = mix(color, '#000000', 0.4);
-    const light = mix(color, '#ffffff', 0.45);
-    const length = points.length;
-
-    // A dark rim under the whole body, then the body itself, thinning and darkening toward the tail.
-    strokeTube(canvas, points, () => outline, 2.4, opacity);
-    strokeTube(canvas, points, (i) => mix(color, dark, (i / length) * 0.8), 0, opacity);
-
-    // Diamond scales along the back, alternating light and dark.
-    for (let i = 1; i < length; i++) {
-        const angle = Math.atan2(points[i - 1].y - points[i].y, points[i - 1].x - points[i].x);
-        const size = segmentRadius(i, length) * 0.62;
-        diamond(canvas, points[i].x, points[i].y, size * 1.2, size * 0.85, angle, i % 2 ? dark : light, (i % 2 ? 0.5 : 0.55) * opacity);
-    }
-
-    // A soft sheen along the top of the body.
-    canvas.save();
-    canvas.translate(-1.2, -1.8);
-    strokeLine(canvas, points.slice(0, -1), segmentRadius(length / 2, length) * 0.55, '#ffffff', 0.22 * opacity);
-    canvas.restore();
-
-    drawHead(canvas, snake, points, color, light, outline, now, lookAt, opacity);
-}
-
-/**
- * Round-capped segments through the body centers. `extra` widens every segment (for the rim).
- */
-function strokeTube(canvas, points, colorAt, extra, opacity) {
-    const length = points.length;
-    if (length === 1) {
-        circle(canvas, points[0].x, points[0].y, segmentRadius(0, 1) + extra / 2, colorAt(0), opacity);
-        return;
-    }
-    for (let i = length - 1; i >= 1; i--) {
-        canvas.drawLine(points[i].x, points[i].y, points[i - 1].x, points[i - 1].y, line(colorAt(i), segmentRadius(i, length) * 2 + extra, opacity));
-    }
-}
-
-/**
- * One even-width line through the points; used for see-through layers so overlaps don't darken.
- */
-function strokeLine(canvas, points, lineWidth, color, alpha) {
     if (points.length < 2) {
         return;
     }
     const path = Skia.PathBuilder.Make();
-    path.moveTo(points[0].x, points[0].y);
+    path.moveTo(points[0].x + 2.5, points[0].y + 4.5);
     for (const point of points.slice(1)) {
-        path.lineTo(point.x, point.y);
+        path.lineTo(point.x + 2.5, point.y + 4.5);
     }
-    canvas.drawPath(path.build(), line(color, lineWidth, alpha));
+    canvas.drawPath(path.build(), line('#000000', bodyRadius(points.length) * 2, 0.32));
 }
 
-function drawHead(canvas, snake, points, color, light, outline, now, lookAt, opacity) {
+/**
+ * A Worms Zone style worm: round beads in the skin's stripes, with one dark rim around the body and
+ * a shine along the top, the skin's little decorations along the back, and a big round head with googly eyes.
+ */
+function drawWorm(canvas, snake, points, { now, lookAt, dead, glow }) {
+    if (!points.length) {
+        return;
+    }
+    const skin = dead ? DEAD_SKIN : skinOf(snake);
+
+    const beads = bodyBeads(points);
+    const rim = shade(skin.color, 0.55);
+    for (const bead of beads) {
+        circle(canvas, bead.x, bead.y, bead.r + 1.6, rim);
+    }
+    for (const bead of beads) {
+        circle(canvas, bead.x, bead.y, bead.r, stripeColor(skin, bead.segment));
+    }
+    for (const bead of beads) {
+        circle(canvas, bead.x - bead.r * 0.25, bead.y - bead.r * 0.3, bead.r * 0.42, '#ffffff', 0.22);
+    }
+
+    if (skin.decoration) {
+        const size = bodyRadius(points.length) * 0.62;
+        for (const spot of decorationSpots(points)) {
+            drawDecoration(canvas, skin, spot.x, spot.y, size, spot.angle, stripeColor(skin, spot.segment));
+        }
+    }
+
+    drawHead(canvas, snake, skin, points, now, lookAt, dead, glow);
+}
+
+/**
+ * The little shapes some skins wear along their back: gears, stars, dots or hearts.
+ */
+function drawDecoration(canvas, skin, x, y, size, angle, under) {
+    const degrees = 180 / Math.PI;
+    canvas.save();
+    canvas.translate(x, y);
+    canvas.rotate(angle * degrees, 0, 0);
+    const accent = paint(fill, skin.accent);
+    if (skin.decoration === 'gear') {
+        // Gears turn as the worm moves along.
+        canvas.rotate((x + y) * 0.05 * degrees, 0, 0);
+        canvas.drawPath(polygonPath(gearCorners(size)), accent);
+        circle(canvas, 0, 0, size * 0.32, under);
+    } else if (skin.decoration === 'star') {
+        canvas.drawPath(polygonPath(starCorners(size)), accent);
+    } else if (skin.decoration === 'heart') {
+        const s = size * 0.9;
+        canvas.rotate(90, 0, 0);
+        const heart = Skia.PathBuilder.Make();
+        heart.moveTo(0, s * 0.75);
+        heart.cubicTo(-s * 1.1, 0, -s * 0.55, -s * 0.85, 0, -s * 0.3);
+        heart.cubicTo(s * 0.55, -s * 0.85, s * 1.1, 0, 0, s * 0.75);
+        canvas.drawPath(heart.build(), accent);
+    } else {
+        circle(canvas, 0, 0, size * 0.5, skin.accent);
+    }
+    canvas.restore();
+}
+
+/**
+ * A big round head in the first stripe's color, with two googly eyes that look where the worm is
+ * looking (and blink now and then), rosy cheeks and a smile.
+ */
+function drawHead(canvas, snake, skin, points, now, lookAt, dead, glow) {
     const head = points[0];
-    const radius = CELL * 0.52;
+    const radius = headRadius(points.length);
     const radians = Math.atan2(snake.dir.y, snake.dir.x);
+    const color = stripeColor(skin, 0);
+
+    if (glow) {
+        const halo = paint(fill, skin.color, 0.85);
+        halo.setMaskFilter(Skia.MaskFilter.MakeBlur(BlurStyle.Normal, 7, true));
+        canvas.drawCircle(head.x, head.y, radius + 1.6, halo);
+    }
+    circle(canvas, head.x, head.y, radius + 1.6, shade(skin.color, 0.55));
+    circle(canvas, head.x, head.y, radius, color);
+    circle(canvas, head.x - radius * 0.3, head.y - radius * 0.35, radius * 0.45, '#ffffff', 0.3);
 
     canvas.save();
     canvas.translate(head.x, head.y);
     canvas.rotate((radians * 180) / Math.PI, 0, 0);
 
-    const flick = (now / 1000 + snake.id * 0.37) % 2.2;
-    if (snake.alive && flick < 0.3) {
-        const reach = Math.sin((flick / 0.3) * Math.PI) * CELL * 0.45;
-        const tip = radius * 0.8 + reach;
-        const tongue = Skia.PathBuilder.Make();
-        tongue.moveTo(radius * 0.8, 0);
-        tongue.lineTo(tip, 0);
-        tongue.lineTo(tip + 3, -2.5);
-        tongue.moveTo(tip, 0);
-        tongue.lineTo(tip + 3, 2.5);
-        canvas.drawPath(tongue.build(), line(TONGUE_COLOR, 1.6, opacity));
-    }
+    // A smile at the front.
+    arc(canvas, radius * 0.42, 0, radius * 0.38, -0.9, 0.9, line(shade(color, 0.65), radius * 0.13));
 
-    if (snake.isPlayer && snake.alive) {
-        const glow = paint(fill, color, 0.8 * opacity);
-        glow.setMaskFilter(Skia.MaskFilter.MakeBlur(BlurStyle.Normal, 6, true));
-        oval(canvas, radius * 0.1, 0, radius * 1.08, radius * 0.92, glow);
-    }
-    oval(canvas, radius * 0.1, 0, radius * 1.08 + 1.2, radius * 0.92 + 1.2, paint(fill, outline, opacity));
-    const headPaint = paint(fill, '#ffffff', opacity);
-    headPaint.setShader(radial(-radius * 0.2, -radius * 0.35, 1, 0, 0, radius * 1.1, [light, color]));
-    oval(canvas, radius * 0.1, 0, radius * 1.08, radius * 0.92, headPaint);
+    circle(canvas, radius * 0.45, -radius * 0.68, radius * 0.17, '#fb7185', 0.4);
+    circle(canvas, radius * 0.45, radius * 0.68, radius * 0.17, '#fb7185', 0.4);
 
-    // Nostrils.
-    circle(canvas, radius * 0.92, -radius * 0.2, radius * 0.07, outline, 0.55 * opacity);
-    circle(canvas, radius * 0.92, radius * 0.2, radius * 0.07, outline, 0.55 * opacity);
-
-    // Pupils turn toward what the snake is looking at; every few seconds it blinks.
     const look = lookDirection(head, lookAt, radians);
     const isBlinking = (now / 1000 + snake.id * 1.37) % 4.2 < 0.13;
-
     for (const side of [-1, 1]) {
-        const ex = radius * 0.35;
-        const ey = side * radius * 0.45;
+        const ex = radius * 0.05;
+        const ey = side * radius * 0.42;
+        const eyeRadius = radius * 0.46;
 
-        if (!snake.alive) {
-            const cross = line('#111827', 1.8, opacity);
-            canvas.drawLine(ex - 2.8, ey - 2.8, ex + 2.8, ey + 2.8, cross);
-            canvas.drawLine(ex + 2.8, ey - 2.8, ex - 2.8, ey + 2.8, cross);
+        circle(canvas, ex, ey, eyeRadius + 1, shade(color, 0.5));
+        if (dead) {
+            circle(canvas, ex, ey, eyeRadius, '#f3f4f6');
+            const arm = eyeRadius * 0.5;
+            const cross = line('#111827', 1.8);
+            canvas.drawLine(ex - arm, ey - arm, ex + arm, ey + arm, cross);
+            canvas.drawLine(ex + arm, ey - arm, ex - arm, ey + arm, cross);
             continue;
         }
-
         if (isBlinking) {
-            canvas.drawLine(ex - radius * 0.3, ey, ex + radius * 0.3, ey, line(outline, 1.6, opacity));
+            circle(canvas, ex, ey, eyeRadius, color);
+            canvas.drawLine(ex - eyeRadius * 0.7, ey, ex + eyeRadius * 0.7, ey, line(shade(color, 0.6), 1.6));
             continue;
         }
-
-        circle(canvas, ex, ey, radius * 0.38, outline, opacity);
-        circle(canvas, ex, ey, radius * 0.34, '#ffffff', opacity);
-        circle(canvas, ex + look.x * radius * 0.13, ey + look.y * radius * 0.13, radius * 0.2, '#0f172a', opacity);
-        circle(canvas, ex + look.x * radius * 0.13 - radius * 0.07, ey + look.y * radius * 0.13 - radius * 0.08, radius * 0.07, '#ffffff', opacity);
+        circle(canvas, ex, ey, eyeRadius, '#ffffff');
+        const px = ex + look.x * eyeRadius * 0.42;
+        const py = ey + look.y * eyeRadius * 0.42;
+        circle(canvas, px, py, eyeRadius * 0.52, '#111827');
+        circle(canvas, px - eyeRadius * 0.18, py - eyeRadius * 0.2, eyeRadius * 0.17, '#ffffff');
     }
-
-    circle(canvas, radius * 0.1, -radius * 0.78, radius * 0.16, '#fb7185', 0.35 * opacity);
-    circle(canvas, radius * 0.1, radius * 0.78, radius * 0.16, '#fb7185', 0.35 * opacity);
 
     canvas.restore();
 }
@@ -687,33 +763,25 @@ function lookDirection(head, lookAt, angle) {
 }
 
 /**
- * A soft pulsing ring where the finger is steering the snake.
+ * The arrow in front of your worm, pointing the way you're steering.
  */
-function drawTarget(canvas, target, now) {
-    const cx = target.x * CELL + CELL / 2;
-    const cy = target.y * CELL + CELL / 2;
-    const pulse = (now / 900) % 1;
-
-    ring(canvas, cx, cy, CELL * 0.45, line('#ffffff', 1.5, 0.5));
-    ring(canvas, cx, cy, CELL * (0.45 + pulse * 0.6), line('#ffffff', 1.5, 0.45 * (1 - pulse)));
-    circle(canvas, cx, cy, 2, '#ffffff', 0.6);
+function drawAim(canvas, arrow) {
+    canvas.save();
+    canvas.translate(arrow.x, arrow.y);
+    canvas.rotate((arrow.angle * 180) / Math.PI, 0, 0);
+    const shape = polygonPath(arrow.corners);
+    canvas.drawPath(shape, paint(fill, STEER_COLOR, 0.95));
+    canvas.drawPath(shape, line(STEER_OUTLINE, 1.6, 0.95));
+    canvas.restore();
 }
 
 /**
- * Fireflies drifting slowly over the grass, twinkling on and off.
+ * The touch joystick: an orange ring where the finger went down, and a knob that follows the finger.
  */
-function drawFireflies(canvas, now, WIDTH, HEIGHT) {
-    for (let i = 0; i < FIREFLIES; i++) {
-        const seed = i * 97.13;
-        const drift = ((seed * 7.1) % 1) * WIDTH + Math.sin(now / 5200 + seed) * 60 + (now / 180) * ((i % 3) - 1);
-        const x = ((drift % WIDTH) + WIDTH) % WIDTH;
-        const y = ((seed * 3.7) % 1) * HEIGHT + Math.sin(now / 3900 + seed * 1.7) * 40;
-        const glow = Math.max(0, Math.sin(now / 900 + seed * 2.3));
-        if (glow > 0) {
-            circle(canvas, x, y, 6, '#fef08a', glow * 0.18);
-            circle(canvas, x, y, 1.3, '#fefce8', glow * 0.8);
-        }
-    }
+function drawStick(canvas, shape) {
+    circle(canvas, shape.x, shape.y, shape.radius, '#000000', 0.12);
+    ring(canvas, shape.x, shape.y, shape.radius, line(STEER_COLOR, shape.radius * 0.07, 0.9));
+    circle(canvas, shape.knobX, shape.knobY, shape.knobRadius, STEER_COLOR);
 }
 
 function drawSparkle(canvas, x, y, size, alpha) {
@@ -727,140 +795,135 @@ function drawSparkle(canvas, x, y, size, alpha) {
 }
 
 /**
- * A diamond (rhombus) centered on x, y, pointing along `angle`.
+ * The arena's edge: a red glow warning you near the wall and a red-and-white candy stripe around it.
  */
-function diamond(canvas, x, y, long, wide, angle, color, alpha) {
-    const cos = Math.cos(angle);
-    const sin = Math.sin(angle);
-    const path = Skia.PathBuilder.Make();
-    path.moveTo(x + cos * long, y + sin * long);
-    path.lineTo(x - sin * wide, y + cos * wide);
-    path.lineTo(x - cos * long, y - sin * long);
-    path.lineTo(x + sin * wide, y - cos * wide);
-    path.close();
-    canvas.drawPath(path.build(), paint(fill, color, alpha));
-}
-
-/**
- * The grass board is drawn once: a lit center, soft mottled patches, a faint checker,
- * grass tufts, pebbles and flowers, and shaded edges so the walls read as walls.
- */
-function drawBoard(cols, rows) {
-    const WIDTH = cols * CELL;
-    const HEIGHT = rows * CELL;
-    const recorder = Skia.PictureRecorder();
-    const canvas = recorder.beginRecording(Skia.XYWHRect(0, 0, WIDTH, HEIGHT));
-
-    const light = paint(fill, '#ffffff');
-    light.setShader(radial(WIDTH * 0.5, HEIGHT * 0.4, 0, WIDTH * 0.5, HEIGHT * 0.5, Math.max(WIDTH, HEIGHT) * 0.7, ['#22532f', '#0c1f14']));
-    canvas.drawRect(Skia.XYWHRect(0, 0, WIDTH, HEIGHT), light);
-
-    const random = seededRandom(7);
-    for (let i = 0; i < 22; i++) {
-        const x = random() * WIDTH;
-        const y = random() * HEIGHT;
-        const radius = CELL * (3 + random() * 5);
-        const patch = paint(fill, '#ffffff');
-        patch.setShader(
-            Skia.Shader.MakeRadialGradient(
-                { x, y },
-                radius,
-                [Skia.Color(i % 2 ? 'rgba(74, 140, 80, 0.16)' : 'rgba(3, 16, 9, 0.22)'), Skia.Color('rgba(0, 0, 0, 0)')],
-                null,
-                TileMode.Clamp,
-            ),
-        );
-        canvas.drawRect(Skia.XYWHRect(x - radius, y - radius, radius * 2, radius * 2), patch);
-    }
-
-    const checker = paint(fill, '#ffffff', 0.026);
-    for (let y = 0; y < rows; y++) {
-        for (let x = y % 2; x < cols; x += 2) {
-            canvas.drawRect(Skia.XYWHRect(x * CELL, y * CELL, CELL, CELL), checker);
-        }
-    }
-
-    const blades = ['#86efac', '#4ade80', '#bef264'];
-    for (let i = 0; i < 230; i++) {
-        const x = random() * WIDTH;
-        const y = random() * HEIGHT;
-        const grass = line(blades[i % blades.length], 1, 0.05 + random() * 0.09);
-        for (const lean of [-2, 0, 2]) {
-            canvas.drawLine(x, y, x + lean + (random() - 0.5), y - 3 - random() * 3, grass);
-        }
-    }
-
-    for (let i = 0; i < 34; i++) {
-        const x = random() * WIDTH;
-        const y = random() * HEIGHT;
-        const size = 1.2 + random() * 1.8;
-        oval(canvas, x + 0.6, y + 0.8, size * 1.3, size, paint(fill, '#04100a', 0.35));
-        oval(canvas, x, y, size * 1.3, size, paint(fill, '#9ca3af', 0.28));
-    }
-
-    const petals = ['#fda4af', '#fde68a', '#c4b5fd', '#ffffff'];
-    for (let i = 0; i < 26; i++) {
-        const x = random() * WIDTH;
-        const y = random() * HEIGHT;
-        const alpha = 0.18 + random() * 0.12;
-        for (let p = 0; p < 5; p++) {
-            const angle = (p / 5) * Math.PI * 2;
-            circle(canvas, x + Math.cos(angle) * 1.8, y + Math.sin(angle) * 1.8, 1.4, petals[i % petals.length], alpha);
-        }
-        circle(canvas, x, y, 1, '#facc15', alpha);
-    }
-
-    // The walls: a shadow falling inward from every edge, and a thin lit rim.
-    const edge = CELL * 0.9;
+function drawWall(canvas, WIDTH, HEIGHT) {
+    const band = CELL * 1.6;
     for (const [x0, y0, x1, y1, rx, ry, rw, rh] of [
-        [0, 0, 0, edge, 0, 0, WIDTH, edge],
-        [0, HEIGHT, 0, HEIGHT - edge, 0, HEIGHT - edge, WIDTH, edge],
-        [0, 0, edge, 0, 0, 0, edge, HEIGHT],
-        [WIDTH, 0, WIDTH - edge, 0, WIDTH - edge, 0, edge, HEIGHT],
+        [0, 0, 0, band, 0, 0, WIDTH, band],
+        [0, HEIGHT, 0, HEIGHT - band, 0, HEIGHT - band, WIDTH, band],
+        [0, 0, band, 0, 0, 0, band, HEIGHT],
+        [WIDTH, 0, WIDTH - band, 0, WIDTH - band, 0, band, HEIGHT],
     ]) {
-        const shade = paint(fill, '#ffffff');
-        shade.setShader(
+        const glow = paint(fill, '#ffffff');
+        glow.setShader(
             Skia.Shader.MakeLinearGradient(
                 { x: x0, y: y0 },
                 { x: x1, y: y1 },
-                [Skia.Color('rgba(0, 0, 0, 0.45)'), Skia.Color('rgba(0, 0, 0, 0)')],
+                [Skia.Color('rgba(239, 68, 68, 0.22)'), Skia.Color('rgba(239, 68, 68, 0)')],
                 null,
                 TileMode.Clamp,
             ),
         );
-        canvas.drawRect(Skia.XYWHRect(rx, ry, rw, rh), shade);
+        canvas.drawRect(Skia.XYWHRect(rx, ry, rw, rh), glow);
     }
-    const rim = paint(stroke, '#bbf7d0', 0.08);
-    rim.setStrokeWidth(1);
-    canvas.drawRect(Skia.XYWHRect(1.5, 1.5, WIDTH - 3, HEIGHT - 3), rim);
 
-    return recorder.finishRecordingAsPicture();
-}
-
-function drawVignette(cols, rows) {
-    const WIDTH = cols * CELL;
-    const HEIGHT = rows * CELL;
-    const recorder = Skia.PictureRecorder();
-    const canvas = recorder.beginRecording(Skia.XYWHRect(0, 0, WIDTH, HEIGHT));
-    const shade = paint(fill, '#ffffff');
-    shade.setShader(
-        radial(WIDTH / 2, HEIGHT / 2, Math.min(WIDTH, HEIGHT) * 0.45, WIDTH / 2, HEIGHT / 2, Math.max(WIDTH, HEIGHT) * 0.72, [
-            'rgba(0, 0, 0, 0)',
-            'rgba(0, 0, 0, 0.45)',
-        ]),
-    );
-    canvas.drawRect(Skia.XYWHRect(0, 0, WIDTH, HEIGHT), shade);
-    return recorder.finishRecordingAsPicture();
+    const thickness = CELL * 0.6;
+    const inset = -thickness / 2;
+    const frame = Skia.XYWHRect(inset, inset, WIDTH - inset * 2, HEIGHT - inset * 2);
+    const edge = paint(stroke, '#3f0d12');
+    edge.setStrokeCap(StrokeCap.Butt);
+    edge.setStrokeJoin(StrokeJoin.Miter);
+    edge.setStrokeWidth(thickness + 3);
+    canvas.drawRect(frame, edge);
+    edge.setColor(Skia.Color('#ef4444'));
+    edge.setStrokeWidth(thickness);
+    canvas.drawRect(frame, edge);
+    edge.setColor(Skia.Color('#fff1f2'));
+    edge.setPathEffect(Skia.PathEffect.MakeDash([CELL * 0.7, CELL * 0.7], 0));
+    canvas.drawRect(frame, edge);
+    edge.setPathEffect(null);
+    edge.setStrokeCap(StrokeCap.Round);
+    edge.setStrokeJoin(StrokeJoin.Round);
 }
 
 /**
- * Blend two #rrggbb colors; amount 0 gives the first, 1 the second.
+ * A small map of the whole field in the corner while zoomed in: every worm's head, yours ringed
+ * in white, and a frame around the part you're looking at.
  */
-function mix(from, to, amount) {
-    const a = parseInt(from.slice(1), 16);
-    const b = parseInt(to.slice(1), 16);
-    const channel = (shift) => Math.round(((a >> shift) & 255) + (((b >> shift) & 255) - ((a >> shift) & 255)) * amount);
-    return `#${[16, 8, 0].map((shift) => channel(shift).toString(16).padStart(2, '0')).join('')}`;
+function drawMinimap(canvas, world, points, me, view, WIDTH, HEIGHT, opacity) {
+    // Upright fields get a narrower map so it doesn't cover too much of the board.
+    const mapWidth = Math.min(WIDTH * (WIDTH > HEIGHT ? 0.22 : 0.26), 190);
+    const mapHeight = (mapWidth * HEIGHT) / WIDTH;
+    const x0 = WIDTH - mapWidth - 12;
+    const y0 = HEIGHT - mapHeight - 12;
+    const s = mapWidth / WIDTH;
+    const frame = Skia.RRectXY(Skia.XYWHRect(x0, y0, mapWidth, mapHeight), 8, 8);
+
+    canvas.saveLayer(paint(fill, '#000000', opacity));
+    canvas.drawRRect(frame, paint(fill, '#0a0a10', 0.72));
+    canvas.drawRRect(frame, line('#ffffff', 1.5, 0.28));
+    canvas.save();
+    canvas.clipRRect(frame, ClipOp.Intersect, true);
+
+    for (const food of world.foods) {
+        if (food.kind === 'fruit' || food.kind === 'power') {
+            circle(canvas, x0 + (food.x + 0.5) * CELL * s, y0 + (food.y + 0.5) * CELL * s, 1.6, food.kind === 'power' ? food.powerUp.color : '#fde68a');
+        }
+    }
+    for (const snake of world.snakes) {
+        const head = points.get(snake)[0];
+        if (!snake.alive || !head) {
+            continue;
+        }
+        const isMe = snake === me;
+        const radius = isMe ? 4 : snake.isPlayer ? 3.2 : 2.4;
+        if (isMe) {
+            circle(canvas, x0 + head.x * s, y0 + head.y * s, radius + 1.8, '#ffffff');
+        }
+        circle(canvas, x0 + head.x * s, y0 + head.y * s, radius, skinOf(snake).color);
+    }
+    const viewFrame = line('#ffffff', 1.2, 0.7);
+    viewFrame.setStrokeJoin(StrokeJoin.Miter);
+    canvas.drawRect(Skia.XYWHRect(x0 + view.left * s, y0 + view.top * s, view.width * s, view.height * s), viewFrame);
+    viewFrame.setStrokeJoin(StrokeJoin.Round);
+    canvas.restore();
+    canvas.restore();
+}
+
+/**
+ * The speckled terrazzo floor as a repeating image: one tile is drawn once at FLOOR_SHARPNESS
+ * pixels per board pixel, then repeated across the field.
+ */
+function makeFloorShader() {
+    const size = Math.round(FLOOR_TILE * FLOOR_SHARPNESS);
+    const surface = Skia.Surface.Make(size, size);
+    const chips = floorChips();
+    const drawTile = (canvas) => {
+        canvas.drawRect(Skia.XYWHRect(0, 0, FLOOR_TILE, FLOOR_TILE), paint(fill, FLOOR_COLOR));
+        for (const chip of chips) {
+            const chipPaint = paint(fill, chip.color, chip.alpha);
+            for (const dx of [-FLOOR_TILE, 0, FLOOR_TILE]) {
+                for (const dy of [-FLOOR_TILE, 0, FLOOR_TILE]) {
+                    canvas.drawPath(polygonPath(chip.corners, dx, dy), chipPaint);
+                }
+            }
+        }
+    };
+
+    if (surface) {
+        const canvas = surface.getCanvas();
+        canvas.scale(FLOOR_SHARPNESS, FLOOR_SHARPNESS);
+        drawTile(canvas);
+        surface.flush();
+        const image = surface.makeImageSnapshot();
+        return image.makeShaderOptions(TileMode.Repeat, TileMode.Repeat, FilterMode.Linear, MipmapMode.Linear, Skia.Matrix().scale(1 / FLOOR_SHARPNESS, 1 / FLOOR_SHARPNESS));
+    }
+    // No offscreen surface (some web previews): repeat a recorded picture instead.
+    const recorder = Skia.PictureRecorder();
+    drawTile(recorder.beginRecording(Skia.XYWHRect(0, 0, FLOOR_TILE, FLOOR_TILE)));
+    return recorder.finishRecordingAsPicture().makeShader(TileMode.Repeat, TileMode.Repeat, FilterMode.Linear, undefined, Skia.XYWHRect(0, 0, FLOOR_TILE, FLOOR_TILE));
+}
+
+function drawVignette(canvas, WIDTH, HEIGHT) {
+    const dim = paint(fill, '#ffffff');
+    dim.setShader(
+        radial(WIDTH / 2, HEIGHT / 2, Math.min(WIDTH, HEIGHT) * 0.5, WIDTH / 2, HEIGHT / 2, Math.max(WIDTH, HEIGHT) * 0.75, [
+            'rgba(0, 0, 0, 0)',
+            'rgba(0, 0, 0, 0.38)',
+        ]),
+    );
+    canvas.drawRect(Skia.XYWHRect(0, 0, WIDTH, HEIGHT), dim);
 }
 
 function easeOutBack(t) {
@@ -870,12 +933,4 @@ function easeOutBack(t) {
 
 function easeOutCubic(t) {
     return 1 - (1 - t) ** 3;
-}
-
-function seededRandom(seed) {
-    let value = seed;
-    return () => {
-        value = (value * 16807) % 2147483647;
-        return (value - 1) / 2147483646;
-    };
 }

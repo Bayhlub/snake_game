@@ -1,26 +1,50 @@
+import { createCamera, pointAt, updateCamera, viewRect } from './camera.js';
 import { CELL } from './config.js';
+import {
+    DEAD_SKIN,
+    FLOOR_COLOR,
+    FLOOR_TILE,
+    VOID_COLOR,
+    bodyBeads,
+    bodyRadius,
+    decorationSpots,
+    floorChips,
+    foodColor,
+    foodRadius,
+    STEER_COLOR,
+    STEER_OUTLINE,
+    aimArrow,
+    gearCorners,
+    headRadius,
+    shade,
+    starCorners,
+    stickShape,
+} from './look.js';
+import { skinOf, stripeColor } from './skins.js';
 import { isEffectActive } from './world.js';
 
-const FOOD_COLOR = '#facc15';
-const FOOD_CORE = '#fef9c3';
-const DEAD_COLOR = '#6b7280';
-const TONGUE_COLOR = '#f43f5e';
 const SHIELD_COLOR = '#38bdf8';
 const MAGNET_COLOR = '#f472b6';
 const SLOW_TINT = '#8b5cf6';
 const EMOJI_FONT = `${Math.round(CELL * 1.05)}px "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif`;
 const ORB_EMOJI_FONT = `${Math.round(CELL * 0.62)}px "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif`;
 const POPUP_FONT = `700 ${Math.round(CELL * 0.8)}px Fredoka, "Noto Sans Lao", "Leelawadee UI", "Lao Sangam MN", ui-sans-serif, system-ui, sans-serif`;
-const FIREFLIES = 14;
 const YOU_COLOR = '#4ade80';
 const TAG_FONT = `700 ${Math.round(CELL * 0.95)}px Fredoka, "Noto Sans Lao", "Leelawadee UI", "Lao Sangam MN", ui-sans-serif, system-ui, sans-serif`;
 /** How long the rings around the player's head pulse at the start of a game. */
 const INTRO_MS = 3500;
+/** The floor tile is drawn sharp enough for this much zoom. */
+const FLOOR_SHARPNESS = 2.5;
 
 /**
  * Draws the world onto a canvas. The canvas keeps a fixed pixel size and CSS scales it to fit.
  * Snakes glide between cells: `progress` (0–1) says how far the current move has gone.
  * `label(powerUp)` gives a power-up's name in the player's language, `youLabel()` the player's name tag.
+ *
+ * A camera follows your worm while you play (`follow`), zoomed in by `zoom`; otherwise it shows the
+ * whole field. `pointAt(fx, fy)` turns a spot on the canvas (as fractions of its size) into a spot on the field.
+ * While you steer, `aim` (which way, in cells) puts an arrow in front of your worm and `stick` draws
+ * the touch joystick. `target` is a cell your worm's eyes look at.
  */
 export function createRenderer(canvas, cols, rows, { label = (powerUp) => powerUp.label, youLabel = () => 'YOU' } = {}) {
     const ctx = canvas.getContext('2d');
@@ -30,10 +54,18 @@ export function createRenderer(canvas, cols, rows, { label = (powerUp) => powerU
 
     canvas.width = width * scale;
     canvas.height = height * scale;
-    ctx.setTransform(scale, 0, 0, scale, 0, 0);
 
-    const board = drawBoard(cols, rows, scale);
+    const floor = ctx.createPattern(drawFloorTile(scale * FLOOR_SHARPNESS), 'repeat');
+    floor.setTransform(new DOMMatrix().scaleSelf(1 / (scale * FLOOR_SHARPNESS)));
     const vignette = drawVignette(width, height, scale);
+    // See-through worms (ghost, blinking) are drawn here first, then copied over at once, so the
+    // overlapping body beads don't show through each other.
+    const layer = document.createElement('canvas');
+    layer.width = canvas.width;
+    layer.height = canvas.height;
+    const layerCtx = layer.getContext('2d');
+
+    const camera = createCamera();
     const foodBornAt = new WeakMap();
     let pending = [];
     let particles = [];
@@ -75,7 +107,7 @@ export function createRenderer(canvas, cols, rows, { label = (powerUp) => powerU
         const y = (event.at?.y ?? event.food.y) * CELL + CELL / 2;
 
         if (event.type === 'eat') {
-            burst(x, y, event.food.kind === 'drop' ? event.food.color : FOOD_COLOR, event.snake.isPlayer ? 10 : 5, 60);
+            burst(x, y, foodColor(event.food), event.snake.isPlayer ? 10 : 5, 60);
             if (event.snake.isPlayer) {
                 popups.push({ x, y, text: `+${event.food.points}`, color: '#fef08a', life: 1 });
             }
@@ -97,7 +129,10 @@ export function createRenderer(canvas, cols, rows, { label = (powerUp) => powerU
             startShake(now, 5, 320);
             startFlash(now, SHIELD_COLOR, 0.25, 300);
         } else {
-            burst(x, y, event.snake.color, 28, 130);
+            const skin = skinOf(event.snake);
+            for (const color of new Set(skin.stripes)) {
+                burst(x, y, color, Math.ceil(28 / skin.stripes.length), 130);
+            }
             burst(x, y, '#ffffff', 8, 80);
             if (event.type === 'playerDied') {
                 startShake(now, 8, 480);
@@ -105,6 +140,85 @@ export function createRenderer(canvas, cols, rows, { label = (powerUp) => powerU
             } else if (event.cause.other?.isPlayer) {
                 startShake(now, 3, 220);
             }
+        }
+    }
+
+    /**
+     * A worm, drawn see-through when `opacity` is below 1.
+     */
+    function drawWormAt(target, snake, points, options) {
+        if (options.opacity >= 1) {
+            drawWorm(target, snake, points, options);
+            return;
+        }
+        layerCtx.setTransform(1, 0, 0, 1, 0, 0);
+        layerCtx.clearRect(0, 0, layer.width, layer.height);
+        layerCtx.setTransform(target.getTransform());
+        drawWorm(layerCtx, snake, points, options);
+        target.save();
+        target.setTransform(1, 0, 0, 1, 0, 0);
+        target.globalAlpha = options.opacity;
+        target.drawImage(layer, 0, 0);
+        target.restore();
+    }
+
+    /**
+     * The player, plus whichever power-ups are running: see-through as a ghost (or blinking
+     * just after a shield broke), a bubble for the shield, and pulses for the magnet.
+     */
+    function drawPlayer(world, player, points, now, lookAt, isMe) {
+        if (!points.length) {
+            return;
+        }
+        const alive = player.alive;
+        const head = points[0];
+
+        if (alive && isEffectActive(world, 'magnet', player)) {
+            for (let i = 0; i < 2; i++) {
+                const t = (now / 900 + i / 2) % 1;
+                ctx.globalAlpha = (1 - t) * 0.45;
+                ctx.strokeStyle = MAGNET_COLOR;
+                ctx.lineWidth = 1.5;
+                ctx.beginPath();
+                ctx.arc(head.x, head.y, CELL * (2.4 - t * 1.8), 0, Math.PI * 2);
+                ctx.stroke();
+            }
+            ctx.globalAlpha = 1;
+        }
+
+        let opacity = 1;
+        if (alive && isEffectActive(world, 'ghost', player)) {
+            opacity = 0.42 + Math.sin(now / 160) * 0.08;
+        } else if (alive && isEffectActive(world, 'grace', player)) {
+            opacity = Math.floor(now / 90) % 2 ? 0.35 : 0.9;
+        }
+
+        drawWormAt(ctx, player, points, { now, lookAt, opacity, dead: !alive, glow: isMe && alive });
+
+        if (alive && isEffectActive(world, 'shield', player)) {
+            const pulse = 1 + Math.sin(now / 220) * 0.06;
+            const radius = CELL * 1.05 * pulse;
+            const bubble = ctx.createRadialGradient(head.x - radius * 0.3, head.y - radius * 0.3, 1, head.x, head.y, radius);
+            bubble.addColorStop(0, 'rgba(186, 230, 253, 0.05)');
+            bubble.addColorStop(0.75, 'rgba(56, 189, 248, 0.12)');
+            bubble.addColorStop(1, 'rgba(56, 189, 248, 0.35)');
+            ctx.fillStyle = bubble;
+            ctx.beginPath();
+            ctx.arc(head.x, head.y, radius, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.strokeStyle = SHIELD_COLOR;
+            ctx.lineWidth = 1.6;
+            ctx.globalAlpha = 0.9;
+            ctx.stroke();
+            const spin = now / 500;
+            ctx.strokeStyle = '#e0f2fe';
+            ctx.lineWidth = 2;
+            ctx.lineCap = 'round';
+            ctx.beginPath();
+            ctx.arc(head.x, head.y, radius - 2, spin, spin + 0.9);
+            ctx.stroke();
+            ctx.globalAlpha = 1;
         }
     }
 
@@ -120,8 +234,14 @@ export function createRenderer(canvas, cols, rows, { label = (powerUp) => powerU
             pending.push({ event, runAt: performance.now() + (isInstant ? 0 : delayMs) });
         },
 
-        draw(world, now, progress, target = null) {
-            const elapsed = Math.min((now - lastNow) / 1000, 0.1);
+        /** The spot on the field under a spot on the canvas, given as fractions (0–1) of its width and height. */
+        pointAt(fx, fy) {
+            return pointAt(camera, cols, rows, fx, fy);
+        },
+
+        draw(world, now, progress, target = null, { zoom = 1, follow = false, aim = null, stick = null } = {}) {
+            const elapsedMs = Math.min(now - lastNow, 100);
+            const elapsed = elapsedMs / 1000;
             lastNow = now;
 
             pending = pending.filter((effect) => {
@@ -135,48 +255,60 @@ export function createRenderer(canvas, cols, rows, { label = (powerUp) => powerU
             // Solo there is one player; online, `meId` says which of the players is on this device.
             const players = world.snakes.filter((snake) => snake.isPlayer);
             const me = world.meId != null ? players.find((snake) => snake.id === world.meId) : players[0];
+            const points = new Map(world.snakes.map((snake) => [snake, snakePoints(snake, progress)]));
 
-            ctx.fillStyle = '#07100c';
+            const focus = follow && me?.alive ? points.get(me)[0] : null;
+            updateCamera(camera, { width, height, focus, zoom, elapsedMs });
+            const view = viewRect(camera, width, height);
+            const isVisible = (x, y, margin = CELL * 2) =>
+                x > view.left - margin && x < view.left + view.width + margin && y > view.top - margin && y < view.top + view.height + margin;
+
+            ctx.setTransform(scale, 0, 0, scale, 0, 0);
+            ctx.fillStyle = VOID_COLOR;
             ctx.fillRect(0, 0, width, height);
             ctx.save();
             if (now < shake.until) {
                 const strength = shake.magnitude * ((shake.until - now) / shake.duration);
                 ctx.translate((Math.random() * 2 - 1) * strength, (Math.random() * 2 - 1) * strength);
             }
+            ctx.scale(camera.zoom, camera.zoom);
+            ctx.translate(-view.left, -view.top);
 
-            ctx.drawImage(board, 0, 0, width, height);
-            drawFireflies(ctx, width, height, now);
+            ctx.fillStyle = floor;
+            ctx.fillRect(0, 0, width, height);
+            drawWall(ctx, width, height);
 
             for (const food of [...world.foods, ...soonEaten]) {
                 if (!foodBornAt.has(food)) {
                     foodBornAt.set(food, now);
                 }
-                drawFood(ctx, food, world, now, now - foodBornAt.get(food), progress);
-            }
-
-            if (target) {
-                drawTarget(ctx, target, now);
+                if (isVisible(food.x * CELL, food.y * CELL)) {
+                    drawFood(ctx, food, world, now, now - foodBornAt.get(food), progress);
+                }
             }
 
             const lookAt = (snake) => nearestFood(world, snake, snake === me ? target : null);
-            for (const snake of world.snakes) {
-                if (snake.body.length) {
-                    drawShadow(ctx, snakePoints(snake, progress));
+            const shown = world.snakes.filter((snake) => points.get(snake).some((point) => isVisible(point.x, point.y)));
+            for (const snake of shown) {
+                drawShadow(ctx, points.get(snake));
+            }
+            for (const snake of shown) {
+                if (!snake.isPlayer) {
+                    drawWorm(ctx, snake, points.get(snake), { now, lookAt: lookAt(snake), opacity: 1, dead: false, glow: false });
                 }
             }
-            for (const snake of world.snakes) {
-                if (!snake.isPlayer && snake.body.length) {
-                    drawSnake(ctx, snake, snakePoints(snake, progress), snake.color, now, lookAt(snake));
-                }
-            }
-            // Everyone else first, so your own snake and tag are always on top.
+            // Everyone else first, so your own worm and tag are always on top.
             for (const player of [...players.filter((snake) => snake !== me), ...(me ? [me] : [])]) {
-                const points = snakePoints(player, progress);
-                drawPlayer(ctx, world, player, points, now, lookAt(player));
-                if (player.alive && points.length) {
-                    const isMe = player === me;
-                    drawNameTag(ctx, world, player, points[0], isMe ? youLabel() : player.name, now, isMe);
+                const playerPoints = points.get(player);
+                const isMe = player === me;
+                drawPlayer(world, player, playerPoints, now, lookAt(player), isMe);
+                if (player.alive && playerPoints.length) {
+                    // While you steer upward, your tag moves below your worm so it doesn't hide the arrow.
+                    drawNameTag(ctx, world, player, playerPoints[0], isMe ? youLabel() : player.name, now, isMe, isMe && aim !== null && aim.y < 0);
                 }
+            }
+            if (aim && me?.alive) {
+                drawAim(ctx, aimArrow(points.get(me)[0], aim, me.body.length));
             }
 
             particles = particles.filter((particle) => {
@@ -237,6 +369,15 @@ export function createRenderer(canvas, cols, rows, { label = (powerUp) => powerU
             }
             ctx.drawImage(vignette, 0, 0, width, height);
 
+            const mapOpacity = Math.min(1, (camera.zoom - 1) * 3);
+            if (mapOpacity > 0.02) {
+                drawMinimap(ctx, world, points, me, view, width, height, mapOpacity);
+            }
+
+            if (stick) {
+                drawStick(ctx, stickShape(stick, width, height));
+            }
+
             if (now < flash.until) {
                 ctx.globalAlpha = flash.strength * ((flash.until - now) / flash.duration);
                 ctx.fillStyle = flash.color;
@@ -245,6 +386,21 @@ export function createRenderer(canvas, cols, rows, { label = (powerUp) => powerU
             }
         },
     };
+}
+
+/**
+ * A little picture of a skin for the skin picker: a short wavy worm looking to the right.
+ */
+export function drawSkinPreview(canvas, skin) {
+    const width = 132;
+    const height = 44;
+    const scale = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = width * scale;
+    canvas.height = height * scale;
+    const ctx = canvas.getContext('2d');
+    ctx.scale(scale, scale);
+    const points = Array.from({ length: 8 }, (_, i) => ({ x: 112 - i * 13, y: 22 + Math.sin(i * 0.95) * 5 }));
+    drawWorm(ctx, { id: 1, skin: skin.id, color: skin.color, dir: { x: 1, y: 0 } }, points, { now: 0, lookAt: null, dead: false, glow: false });
 }
 
 /**
@@ -285,297 +441,165 @@ function nearestFood(world, snake, target) {
     return best;
 }
 
-/**
- * Body thickness: full near the head, thinner toward the tail, with a pointed tip.
- */
-function segmentRadius(i, length) {
-    const base = CELL * 0.44 * (1 - (i / Math.max(length, 6)) * 0.45);
-    const tip = i === length - 1 ? 0.5 : i === length - 2 ? 0.78 : 1;
-    return base * tip;
-}
-
 function drawShadow(ctx, points) {
-    ctx.save();
-    ctx.translate(2, 4);
-    ctx.globalAlpha = 0.3;
-    strokeLine(ctx, points, segmentRadius(points.length / 2, points.length) * 2, '#000000');
-    ctx.restore();
-}
-
-/**
- * The player, plus whichever power-ups are running: see-through as a ghost (or blinking
- * just after a shield broke), a bubble for the shield, and pulses for the magnet.
- */
-function drawPlayer(ctx, world, player, points, now, lookAt) {
-    if (!points.length) {
-        return;
-    }
-    const alive = player.alive;
-    const head = points[0];
-
-    if (alive && isEffectActive(world, 'magnet', player)) {
-        for (let i = 0; i < 2; i++) {
-            const t = (now / 900 + i / 2) % 1;
-            ctx.globalAlpha = (1 - t) * 0.45;
-            ctx.strokeStyle = MAGNET_COLOR;
-            ctx.lineWidth = 1.5;
-            ctx.beginPath();
-            ctx.arc(head.x, head.y, CELL * (2.4 - t * 1.8), 0, Math.PI * 2);
-            ctx.stroke();
-        }
-        ctx.globalAlpha = 1;
-    }
-
-    let alpha = 1;
-    if (alive && isEffectActive(world, 'ghost', player)) {
-        alpha = 0.42 + Math.sin(now / 160) * 0.08;
-    } else if (alive && isEffectActive(world, 'grace', player)) {
-        alpha = Math.floor(now / 90) % 2 ? 0.35 : 0.9;
-    }
-
-    drawSnake(ctx, player, points, alive ? player.color : DEAD_COLOR, now, lookAt, alpha);
-
-    if (alive && isEffectActive(world, 'shield', player)) {
-        const pulse = 1 + Math.sin(now / 220) * 0.06;
-        const radius = CELL * 0.95 * pulse;
-        const bubble = ctx.createRadialGradient(head.x - radius * 0.3, head.y - radius * 0.3, 1, head.x, head.y, radius);
-        bubble.addColorStop(0, 'rgba(186, 230, 253, 0.05)');
-        bubble.addColorStop(0.75, 'rgba(56, 189, 248, 0.12)');
-        bubble.addColorStop(1, 'rgba(56, 189, 248, 0.35)');
-        ctx.fillStyle = bubble;
-        ctx.beginPath();
-        ctx.arc(head.x, head.y, radius, 0, Math.PI * 2);
-        ctx.fill();
-
-        ctx.strokeStyle = SHIELD_COLOR;
-        ctx.lineWidth = 1.6;
-        ctx.globalAlpha = 0.9;
-        ctx.stroke();
-        const spin = now / 500;
-        ctx.strokeStyle = '#e0f2fe';
-        ctx.lineWidth = 2;
-        ctx.lineCap = 'round';
-        ctx.beginPath();
-        ctx.arc(head.x, head.y, radius - 2, spin, spin + 0.9);
-        ctx.stroke();
-        ctx.globalAlpha = 1;
-    }
-}
-
-/**
- * A name tag pointing at a player's head (below it when the head is near the top wall): "YOU" on
- * your own snake, the player's name on others. Yours also pulses rings for a few seconds after it appears.
- */
-function drawNameTag(ctx, world, snake, head, text, now, isMe) {
-    const intro = isMe ? Math.max(0, 1 - (world.time - (snake.spawnedAt ?? 0)) / INTRO_MS) : 0;
-    const tagColor = isMe && !world.multiplayer ? YOU_COLOR : snake.color;
-    const width = world.cols * CELL;
-
-    for (let i = 0; intro > 0 && i < 2; i++) {
-        const t = (now / 750 + i / 2) % 1;
-        ctx.globalAlpha = intro * (1 - t) * 0.85;
-        ctx.strokeStyle = tagColor;
-        ctx.lineWidth = 2.5;
-        ctx.beginPath();
-        ctx.arc(head.x, head.y, CELL * (0.9 + t * 2.4), 0, Math.PI * 2);
-        ctx.stroke();
-    }
-
-    ctx.font = TAG_FONT;
-    const tagWidth = ctx.measureText(text).width + CELL;
-    const tagHeight = CELL * 1.3;
-    const below = head.y < CELL * 2.6;
-    const bounce = Math.sin(now / 160) * 2.5 * intro;
-    const cy = head.y + (below ? CELL * 1.6 : -CELL * 1.6) + bounce * (below ? 1 : -1);
-    const cx = Math.min(Math.max(head.x, tagWidth / 2 + 2), width - tagWidth / 2 - 2);
-    const tipY = cy + (below ? -tagHeight / 2 - 4 : tagHeight / 2 + 4);
-
-    ctx.globalAlpha = 0.92;
-    ctx.fillStyle = '#052e16';
-    ctx.strokeStyle = tagColor;
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.roundRect(cx - tagWidth / 2, cy - tagHeight / 2, tagWidth, tagHeight, tagHeight / 2);
-    ctx.moveTo(head.x - 4, below ? cy - tagHeight / 2 : cy + tagHeight / 2);
-    ctx.lineTo(head.x, tipY);
-    ctx.lineTo(head.x + 4, below ? cy - tagHeight / 2 : cy + tagHeight / 2);
-    ctx.fill();
-    ctx.stroke();
-
-    ctx.globalAlpha = 1;
-    ctx.fillStyle = '#dcfce7';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(text, cx, cy + 0.5);
-}
-
-function drawSnake(ctx, snake, points, color, now, lookAt, opacity = 1) {
-    if (!points.length) {
-        return;
-    }
-
-    const outline = mix(color, '#000000', 0.62);
-    const dark = mix(color, '#000000', 0.4);
-    const light = mix(color, '#ffffff', 0.45);
-    const length = points.length;
-
-    // A dark rim under the whole body, then the body itself, thinning and darkening toward the tail.
-    ctx.globalAlpha = opacity;
-    strokeTube(ctx, points, () => outline, 2.4);
-    strokeTube(ctx, points, (i) => mix(color, dark, (i / length) * 0.8), 0);
-
-    // Diamond scales along the back, alternating light and dark.
-    for (let i = 1; i < length; i++) {
-        const angle = Math.atan2(points[i - 1].y - points[i].y, points[i - 1].x - points[i].x);
-        const size = segmentRadius(i, length) * 0.62;
-        ctx.globalAlpha = (i % 2 ? 0.5 : 0.55) * opacity;
-        diamond(ctx, points[i].x, points[i].y, size * 1.2, size * 0.85, angle, i % 2 ? dark : light);
-    }
-
-    // A soft sheen along the top of the body.
-    ctx.globalAlpha = 0.22 * opacity;
-    ctx.save();
-    ctx.translate(-1.2, -1.8);
-    strokeLine(ctx, points.slice(0, -1), segmentRadius(length / 2, length) * 0.55, '#ffffff');
-    ctx.restore();
-
-    ctx.globalAlpha = opacity;
-    drawHead(ctx, snake, points, color, light, outline, now, lookAt, opacity);
-    ctx.globalAlpha = 1;
-}
-
-/**
- * Stroke round-capped segments through the body centers. `extra` widens every segment (for the rim).
- */
-function strokeTube(ctx, points, colorAt, extra) {
-    const length = points.length;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-
-    if (length === 1) {
-        circle(ctx, points[0].x, points[0].y, segmentRadius(0, 1) + extra / 2, colorAt(0));
-        return;
-    }
-    for (let i = length - 1; i >= 1; i--) {
-        ctx.strokeStyle = colorAt(i);
-        ctx.lineWidth = segmentRadius(i, length) * 2 + extra;
-        ctx.beginPath();
-        ctx.moveTo(points[i].x, points[i].y);
-        ctx.lineTo(points[i - 1].x, points[i - 1].y);
-        ctx.stroke();
-    }
-}
-
-/**
- * Stroke one even-width line through the points; used for see-through layers so overlaps don't darken.
- */
-function strokeLine(ctx, points, lineWidth, color) {
     if (points.length < 2) {
         return;
     }
+    ctx.save();
+    ctx.translate(2.5, 4.5);
+    ctx.globalAlpha = 0.32;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-    ctx.lineWidth = lineWidth;
-    ctx.strokeStyle = color;
+    ctx.lineWidth = bodyRadius(points.length) * 2;
+    ctx.strokeStyle = '#000000';
     ctx.beginPath();
     ctx.moveTo(points[0].x, points[0].y);
     for (const point of points.slice(1)) {
         ctx.lineTo(point.x, point.y);
     }
     ctx.stroke();
+    ctx.restore();
 }
 
-function drawHead(ctx, snake, points, color, light, outline, now, lookAt, opacity) {
+/**
+ * A Worms Zone style worm: round beads in the skin's stripes, each with a soft rim and shine,
+ * the skin's little decorations along the back, and a big round head with googly eyes.
+ */
+function drawWorm(ctx, snake, points, { now, lookAt, dead, glow }) {
+    if (!points.length) {
+        return;
+    }
+    const skin = dead ? DEAD_SKIN : skinOf(snake);
+
+    // A dark rim around the whole body first, then the striped beads, then a shine along the top.
+    const beads = bodyBeads(points);
+    const rim = shade(skin.color, 0.55);
+    for (const bead of beads) {
+        circle(ctx, bead.x, bead.y, bead.r + 1.6, rim);
+    }
+    for (const bead of beads) {
+        circle(ctx, bead.x, bead.y, bead.r, stripeColor(skin, bead.segment));
+    }
+    ctx.globalAlpha = 0.22;
+    for (const bead of beads) {
+        circle(ctx, bead.x - bead.r * 0.25, bead.y - bead.r * 0.3, bead.r * 0.42, '#ffffff');
+    }
+    ctx.globalAlpha = 1;
+
+    if (skin.decoration) {
+        const size = bodyRadius(points.length) * 0.62;
+        for (const spot of decorationSpots(points)) {
+            drawDecoration(ctx, skin, spot.x, spot.y, size, spot.angle, stripeColor(skin, spot.segment));
+        }
+    }
+
+    drawHead(ctx, snake, skin, points, now, lookAt, dead, glow);
+}
+
+/**
+ * The little shapes some skins wear along their back: gears, stars, dots or hearts.
+ */
+function drawDecoration(ctx, skin, x, y, size, angle, under) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(angle);
+    ctx.fillStyle = skin.accent;
+    if (skin.decoration === 'gear') {
+        // Gears turn as the worm moves along.
+        ctx.rotate((x + y) * 0.05);
+        polygon(ctx, gearCorners(size));
+        circle(ctx, 0, 0, size * 0.32, under);
+    } else if (skin.decoration === 'star') {
+        polygon(ctx, starCorners(size));
+    } else if (skin.decoration === 'heart') {
+        const s = size * 0.9;
+        ctx.rotate(Math.PI / 2);
+        ctx.beginPath();
+        ctx.moveTo(0, s * 0.75);
+        ctx.bezierCurveTo(-s * 1.1, 0, -s * 0.55, -s * 0.85, 0, -s * 0.3);
+        ctx.bezierCurveTo(s * 0.55, -s * 0.85, s * 1.1, 0, 0, s * 0.75);
+        ctx.fill();
+    } else {
+        circle(ctx, 0, 0, size * 0.5, skin.accent);
+    }
+    ctx.restore();
+}
+
+/**
+ * A big round head in the first stripe's color, with two googly eyes that look where the worm is
+ * looking (and blink now and then), rosy cheeks and a smile.
+ */
+function drawHead(ctx, snake, skin, points, now, lookAt, dead, glow) {
     const head = points[0];
-    const dir = snake.dir;
-    const radius = CELL * 0.52;
-    const angle = Math.atan2(dir.y, dir.x);
+    const radius = headRadius(points.length);
+    const angle = Math.atan2(snake.dir.y, snake.dir.x);
+    const color = stripeColor(skin, 0);
+
+    if (glow) {
+        ctx.shadowColor = skin.color;
+        ctx.shadowBlur = 16;
+    }
+    circle(ctx, head.x, head.y, radius + 1.6, shade(skin.color, 0.55));
+    ctx.shadowBlur = 0;
+    circle(ctx, head.x, head.y, radius, color);
+    ctx.globalAlpha = 0.3;
+    circle(ctx, head.x - radius * 0.3, head.y - radius * 0.35, radius * 0.45, '#ffffff');
+    ctx.globalAlpha = 1;
 
     ctx.save();
     ctx.translate(head.x, head.y);
     ctx.rotate(angle);
 
-    const flick = (now / 1000 + snake.id * 0.37) % 2.2;
-    if (snake.alive && flick < 0.3) {
-        const reach = Math.sin((flick / 0.3) * Math.PI) * CELL * 0.45;
-        ctx.strokeStyle = TONGUE_COLOR;
-        ctx.lineWidth = 1.6;
-        ctx.lineCap = 'round';
-        ctx.beginPath();
-        ctx.moveTo(radius * 0.8, 0);
-        ctx.lineTo(radius * 0.8 + reach, 0);
-        ctx.lineTo(radius * 0.8 + reach + 3, -2.5);
-        ctx.moveTo(radius * 0.8 + reach, 0);
-        ctx.lineTo(radius * 0.8 + reach + 3, 2.5);
-        ctx.stroke();
-    }
-
-    if (snake.isPlayer && snake.alive) {
-        ctx.shadowColor = color;
-        ctx.shadowBlur = 14;
-    }
-    ctx.fillStyle = outline;
+    // A smile at the front.
+    ctx.strokeStyle = shade(color, 0.65);
+    ctx.lineWidth = radius * 0.13;
+    ctx.lineCap = 'round';
     ctx.beginPath();
-    ctx.ellipse(radius * 0.1, 0, radius * 1.08 + 1.2, radius * 0.92 + 1.2, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.shadowBlur = 0;
+    ctx.arc(radius * 0.42, 0, radius * 0.38, -0.9, 0.9);
+    ctx.stroke();
 
-    const gradient = ctx.createRadialGradient(-radius * 0.2, -radius * 0.35, 1, 0, 0, radius * 1.1);
-    gradient.addColorStop(0, light);
-    gradient.addColorStop(1, color);
-    ctx.fillStyle = gradient;
-    ctx.beginPath();
-    ctx.ellipse(radius * 0.1, 0, radius * 1.08, radius * 0.92, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Nostrils.
-    ctx.globalAlpha = 0.55 * opacity;
-    circle(ctx, radius * 0.92, -radius * 0.2, radius * 0.07, outline);
-    circle(ctx, radius * 0.92, radius * 0.2, radius * 0.07, outline);
-    ctx.globalAlpha = opacity;
-
-    // Pupils turn toward what the snake is looking at; every few seconds it blinks.
-    const look = lookDirection(head, lookAt, angle);
-    const isBlinking = (now / 1000 + snake.id * 1.37) % 4.2 < 0.13;
-
-    for (const side of [-1, 1]) {
-        const ex = radius * 0.35;
-        const ey = side * radius * 0.45;
-
-        if (!snake.alive) {
-            ctx.strokeStyle = '#111827';
-            ctx.lineWidth = 1.8;
-            ctx.beginPath();
-            ctx.moveTo(ex - 2.8, ey - 2.8);
-            ctx.lineTo(ex + 2.8, ey + 2.8);
-            ctx.moveTo(ex + 2.8, ey - 2.8);
-            ctx.lineTo(ex - 2.8, ey + 2.8);
-            ctx.stroke();
-            continue;
-        }
-
-        if (isBlinking) {
-            ctx.strokeStyle = outline;
-            ctx.lineWidth = 1.6;
-            ctx.lineCap = 'round';
-            ctx.beginPath();
-            ctx.moveTo(ex - radius * 0.3, ey);
-            ctx.lineTo(ex + radius * 0.3, ey);
-            ctx.stroke();
-            continue;
-        }
-
-        circle(ctx, ex, ey, radius * 0.38, outline);
-        circle(ctx, ex, ey, radius * 0.34, '#ffffff');
-        circle(ctx, ex + look.x * radius * 0.13, ey + look.y * radius * 0.13, radius * 0.2, '#0f172a');
-        circle(ctx, ex + look.x * radius * 0.13 - radius * 0.07, ey + look.y * radius * 0.13 - radius * 0.08, radius * 0.07, '#ffffff');
-    }
-
-    ctx.globalAlpha = 0.35 * opacity;
-    circle(ctx, radius * 0.1, -radius * 0.78, radius * 0.16, '#fb7185');
-    circle(ctx, radius * 0.1, radius * 0.78, radius * 0.16, '#fb7185');
+    ctx.globalAlpha = 0.4;
+    circle(ctx, radius * 0.45, -radius * 0.68, radius * 0.17, '#fb7185');
+    circle(ctx, radius * 0.45, radius * 0.68, radius * 0.17, '#fb7185');
     ctx.globalAlpha = 1;
 
+    const look = lookDirection(head, lookAt, angle);
+    const isBlinking = (now / 1000 + snake.id * 1.37) % 4.2 < 0.13;
+    for (const side of [-1, 1]) {
+        const ex = radius * 0.05;
+        const ey = side * radius * 0.42;
+        const eyeRadius = radius * 0.46;
+
+        circle(ctx, ex, ey, eyeRadius + 1, shade(color, 0.5));
+        if (dead) {
+            circle(ctx, ex, ey, eyeRadius, '#f3f4f6');
+            ctx.strokeStyle = '#111827';
+            ctx.lineWidth = 1.8;
+            const arm = eyeRadius * 0.5;
+            ctx.beginPath();
+            ctx.moveTo(ex - arm, ey - arm);
+            ctx.lineTo(ex + arm, ey + arm);
+            ctx.moveTo(ex + arm, ey - arm);
+            ctx.lineTo(ex - arm, ey + arm);
+            ctx.stroke();
+            continue;
+        }
+        if (isBlinking) {
+            circle(ctx, ex, ey, eyeRadius, color);
+            ctx.strokeStyle = shade(color, 0.6);
+            ctx.lineWidth = 1.6;
+            ctx.beginPath();
+            ctx.moveTo(ex - eyeRadius * 0.7, ey);
+            ctx.lineTo(ex + eyeRadius * 0.7, ey);
+            ctx.stroke();
+            continue;
+        }
+        circle(ctx, ex, ey, eyeRadius, '#ffffff');
+        const px = ex + look.x * eyeRadius * 0.42;
+        const py = ey + look.y * eyeRadius * 0.42;
+        circle(ctx, px, py, eyeRadius * 0.52, '#111827');
+        circle(ctx, px - eyeRadius * 0.18, py - eyeRadius * 0.2, eyeRadius * 0.17, '#ffffff');
+    }
     ctx.restore();
 }
 
@@ -592,6 +616,53 @@ function lookDirection(head, lookAt, angle) {
     const cos = Math.cos(-angle);
     const sin = Math.sin(-angle);
     return { x: (dx * cos - dy * sin) / length, y: (dx * sin + dy * cos) / length };
+}
+
+/**
+ * A name tag pointing at a player's head (below it when the head is near the top wall): "YOU" on
+ * your own snake, the player's name on others; below the head when `putBelow`. Yours also pulses rings for a few seconds after it appears.
+ */
+function drawNameTag(ctx, world, snake, head, text, now, isMe, putBelow = false) {
+    const intro = isMe ? Math.max(0, 1 - (world.time - (snake.spawnedAt ?? 0)) / INTRO_MS) : 0;
+    const tagColor = isMe && !world.multiplayer ? YOU_COLOR : skinOf(snake).color;
+    const width = world.cols * CELL;
+
+    for (let i = 0; intro > 0 && i < 2; i++) {
+        const t = (now / 750 + i / 2) % 1;
+        ctx.globalAlpha = intro * (1 - t) * 0.85;
+        ctx.strokeStyle = tagColor;
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.arc(head.x, head.y, CELL * (0.9 + t * 2.4), 0, Math.PI * 2);
+        ctx.stroke();
+    }
+
+    ctx.font = TAG_FONT;
+    const tagWidth = ctx.measureText(text).width + CELL;
+    const tagHeight = CELL * 1.3;
+    const below = putBelow || head.y < CELL * 2.6;
+    const bounce = Math.sin(now / 160) * 2.5 * intro;
+    const cy = head.y + (below ? CELL * 1.7 : -CELL * 1.7) + bounce * (below ? 1 : -1);
+    const cx = Math.min(Math.max(head.x, tagWidth / 2 + 2), width - tagWidth / 2 - 2);
+    const tipY = cy + (below ? -tagHeight / 2 - 4 : tagHeight / 2 + 4);
+
+    ctx.globalAlpha = 0.92;
+    ctx.fillStyle = '#111118';
+    ctx.strokeStyle = tagColor;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.roundRect(cx - tagWidth / 2, cy - tagHeight / 2, tagWidth, tagHeight, tagHeight / 2);
+    ctx.moveTo(head.x - 4, below ? cy - tagHeight / 2 : cy + tagHeight / 2);
+    ctx.lineTo(head.x, tipY);
+    ctx.lineTo(head.x + 4, below ? cy - tagHeight / 2 : cy + tagHeight / 2);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = '#ffffff';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, cx, cy + 0.5);
 }
 
 function drawFood(ctx, food, world, now, age, progress) {
@@ -639,21 +710,20 @@ function drawFood(ctx, food, world, now, age, progress) {
         return;
     }
 
-    const color = food.kind === 'drop' ? food.color : FOOD_COLOR;
-    const size = (food.kind === 'drop' ? 0.2 : 0.26) * CELL * grow;
-    const pulse = 1 + Math.sin(now / 250 + food.x * 3 + food.y) * 0.15;
+    // A glowing candy dot: a soft halo, a bright ball and a little shine.
+    const color = foodColor(food);
+    const size = foodRadius(food) * grow;
+    const pulse = 1 + Math.sin(now / 250 + food.x * 3 + food.y) * 0.18;
 
-    ctx.globalAlpha = 0.18;
-    circle(ctx, cx, cy, size * 2.4 * pulse, color);
+    ctx.globalAlpha = 0.16;
+    circle(ctx, cx, cy, size * 2.8 * pulse, color);
+    ctx.globalAlpha = 0.3;
+    circle(ctx, cx, cy, size * 1.7 * pulse, color);
     ctx.globalAlpha = 1;
-
-    const gradient = ctx.createRadialGradient(cx - size * 0.35, cy - size * 0.35, 0.5, cx, cy, size);
-    gradient.addColorStop(0, FOOD_CORE);
-    gradient.addColorStop(1, color);
-    ctx.fillStyle = gradient;
-    ctx.beginPath();
-    ctx.arc(cx, cy, size, 0, Math.PI * 2);
-    ctx.fill();
+    circle(ctx, cx, cy, size, color);
+    ctx.globalAlpha = 0.75;
+    circle(ctx, cx - size * 0.3, cy - size * 0.3, size * 0.38, '#ffffff');
+    ctx.globalAlpha = 1;
 }
 
 /**
@@ -671,7 +741,7 @@ function drawPowerUp(ctx, food, world, now, cx, cy, grow) {
     ctx.globalAlpha = 0.28;
     circle(ctx, cx, y, CELL * 1.05 * pulse * grow, color);
     ctx.globalAlpha = 0.9;
-    circle(ctx, cx, y, CELL * 0.5 * grow, '#0b1712');
+    circle(ctx, cx, y, CELL * 0.5 * grow, '#111118');
     ctx.globalAlpha = 1;
 
     const spin = now / 380;
@@ -695,46 +765,39 @@ function drawPowerUp(ctx, food, world, now, cx, cy, grow) {
 }
 
 /**
- * A soft pulsing ring where the mouse or finger is steering the snake.
+ * The arrow in front of your worm, pointing the way you're steering.
  */
-function drawTarget(ctx, target, now) {
-    const cx = target.x * CELL + CELL / 2;
-    const cy = target.y * CELL + CELL / 2;
-    const pulse = (now / 900) % 1;
-
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 1.5;
-    ctx.globalAlpha = 0.5;
+function drawAim(ctx, arrow) {
+    ctx.save();
+    ctx.translate(arrow.x, arrow.y);
+    ctx.rotate(arrow.angle);
     ctx.beginPath();
-    ctx.arc(cx, cy, CELL * 0.45, 0, Math.PI * 2);
+    arrow.corners.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+    ctx.closePath();
+    ctx.globalAlpha = 0.95;
+    ctx.fillStyle = STEER_COLOR;
+    ctx.fill();
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 1.6;
+    ctx.strokeStyle = STEER_OUTLINE;
     ctx.stroke();
-
-    ctx.globalAlpha = 0.45 * (1 - pulse);
-    ctx.beginPath();
-    ctx.arc(cx, cy, CELL * (0.45 + pulse * 0.6), 0, Math.PI * 2);
-    ctx.stroke();
-
-    ctx.globalAlpha = 0.6;
-    circle(ctx, cx, cy, 2, '#ffffff');
-    ctx.globalAlpha = 1;
+    ctx.restore();
 }
 
 /**
- * Fireflies drifting slowly over the grass, twinkling on and off.
+ * The touch joystick: an orange ring where the finger went down, and a knob that follows the finger.
  */
-function drawFireflies(ctx, width, height, now) {
-    for (let i = 0; i < FIREFLIES; i++) {
-        const seed = i * 97.13;
-        const drift = ((seed * 7.1) % 1) * width + Math.sin(now / 5200 + seed) * 60 + (now / 180) * ((i % 3) - 1);
-        const x = ((drift % width) + width) % width;
-        const y = ((seed * 3.7) % 1) * height + Math.sin(now / 3900 + seed * 1.7) * 40;
-        const glow = Math.max(0, Math.sin(now / 900 + seed * 2.3));
-        ctx.globalAlpha = glow * 0.18;
-        circle(ctx, x, y, 6, '#fef08a');
-        ctx.globalAlpha = glow * 0.8;
-        circle(ctx, x, y, 1.3, '#fefce8');
-    }
+function drawStick(ctx, shape) {
+    ctx.globalAlpha = 0.12;
+    circle(ctx, shape.x, shape.y, shape.radius, '#000000');
+    ctx.globalAlpha = 0.9;
+    ctx.strokeStyle = STEER_COLOR;
+    ctx.lineWidth = shape.radius * 0.07;
+    ctx.beginPath();
+    ctx.arc(shape.x, shape.y, shape.radius, 0, Math.PI * 2);
+    ctx.stroke();
     ctx.globalAlpha = 1;
+    circle(ctx, shape.knobX, shape.knobY, shape.knobRadius, STEER_COLOR);
 }
 
 function drawSparkle(ctx, x, y, size) {
@@ -749,107 +812,110 @@ function drawSparkle(ctx, x, y, size) {
 }
 
 /**
- * The grass board is drawn once: a lit center, soft mottled patches, a faint checker,
- * grass tufts, pebbles and flowers, and shaded edges so the walls read as walls.
+ * The arena's edge: a red glow warning you near the wall and a red-and-white candy stripe around it.
  */
-function drawBoard(cols, rows, scale) {
-    const width = cols * CELL;
-    const height = rows * CELL;
-    const board = document.createElement('canvas');
-    board.width = width * scale;
-    board.height = height * scale;
-
-    const ctx = board.getContext('2d');
-    ctx.scale(scale, scale);
-
-    const light = ctx.createRadialGradient(width * 0.5, height * 0.4, 0, width * 0.5, height * 0.5, width * 0.7);
-    light.addColorStop(0, '#22532f');
-    light.addColorStop(1, '#0c1f14');
-    ctx.fillStyle = light;
-    ctx.fillRect(0, 0, width, height);
-
-    const random = seededRandom(7);
-    for (let i = 0; i < 22; i++) {
-        const x = random() * width;
-        const y = random() * height;
-        const radius = CELL * (3 + random() * 5);
-        const patch = ctx.createRadialGradient(x, y, 0, x, y, radius);
-        patch.addColorStop(0, i % 2 ? 'rgba(74, 140, 80, 0.16)' : 'rgba(3, 16, 9, 0.22)');
-        patch.addColorStop(1, 'rgba(0, 0, 0, 0)');
-        ctx.fillStyle = patch;
-        ctx.fillRect(x - radius, y - radius, radius * 2, radius * 2);
-    }
-
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.026)';
-    for (let y = 0; y < rows; y++) {
-        for (let x = y % 2; x < cols; x += 2) {
-            ctx.fillRect(x * CELL, y * CELL, CELL, CELL);
-        }
-    }
-
-    const blades = ['134, 239, 172', '74, 222, 128', '190, 242, 100'];
-    ctx.lineCap = 'round';
-    for (let i = 0; i < 230; i++) {
-        const x = random() * width;
-        const y = random() * height;
-        ctx.strokeStyle = `rgba(${blades[i % blades.length]}, ${0.05 + random() * 0.09})`;
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        for (const lean of [-2, 0, 2]) {
-            ctx.moveTo(x, y);
-            ctx.lineTo(x + lean + (random() - 0.5), y - 3 - random() * 3);
-        }
-        ctx.stroke();
-    }
-
-    for (let i = 0; i < 34; i++) {
-        const x = random() * width;
-        const y = random() * height;
-        const size = 1.2 + random() * 1.8;
-        ctx.globalAlpha = 0.35;
-        ctx.fillStyle = '#04100a';
-        ctx.beginPath();
-        ctx.ellipse(x + 0.6, y + 0.8, size * 1.3, size, 0, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.globalAlpha = 0.28;
-        ctx.fillStyle = '#9ca3af';
-        ctx.beginPath();
-        ctx.ellipse(x, y, size * 1.3, size, 0, 0, Math.PI * 2);
-        ctx.fill();
-    }
-
-    const petals = ['#fda4af', '#fde68a', '#c4b5fd', '#ffffff'];
-    for (let i = 0; i < 26; i++) {
-        const x = random() * width;
-        const y = random() * height;
-        ctx.globalAlpha = 0.18 + random() * 0.12;
-        for (let p = 0; p < 5; p++) {
-            const angle = (p / 5) * Math.PI * 2;
-            circle(ctx, x + Math.cos(angle) * 1.8, y + Math.sin(angle) * 1.8, 1.4, petals[i % petals.length]);
-        }
-        circle(ctx, x, y, 1, '#facc15');
-    }
-    ctx.globalAlpha = 1;
-
-    // The walls: a shadow falling inward from every edge, and a thin lit rim.
-    const edge = CELL * 0.9;
+function drawWall(ctx, width, height) {
+    const band = CELL * 1.6;
     for (const [x0, y0, x1, y1, rx, ry, rw, rh] of [
-        [0, 0, 0, edge, 0, 0, width, edge],
-        [0, height, 0, height - edge, 0, height - edge, width, edge],
-        [0, 0, edge, 0, 0, 0, edge, height],
-        [width, 0, width - edge, 0, width - edge, 0, edge, height],
+        [0, 0, 0, band, 0, 0, width, band],
+        [0, height, 0, height - band, 0, height - band, width, band],
+        [0, 0, band, 0, 0, 0, band, height],
+        [width, 0, width - band, 0, width - band, 0, band, height],
     ]) {
-        const shade = ctx.createLinearGradient(x0, y0, x1, y1);
-        shade.addColorStop(0, 'rgba(0, 0, 0, 0.45)');
-        shade.addColorStop(1, 'rgba(0, 0, 0, 0)');
-        ctx.fillStyle = shade;
+        const glow = ctx.createLinearGradient(x0, y0, x1, y1);
+        glow.addColorStop(0, 'rgba(239, 68, 68, 0.22)');
+        glow.addColorStop(1, 'rgba(239, 68, 68, 0)');
+        ctx.fillStyle = glow;
         ctx.fillRect(rx, ry, rw, rh);
     }
-    ctx.strokeStyle = 'rgba(187, 247, 208, 0.08)';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(1.5, 1.5, width - 3, height - 3);
 
-    return board;
+    const thickness = CELL * 0.6;
+    const inset = -thickness / 2;
+    ctx.lineJoin = 'miter';
+    ctx.lineCap = 'butt';
+    ctx.lineWidth = thickness + 3;
+    ctx.strokeStyle = '#3f0d12';
+    ctx.strokeRect(inset, inset, width - inset * 2, height - inset * 2);
+    ctx.lineWidth = thickness;
+    ctx.strokeStyle = '#ef4444';
+    ctx.strokeRect(inset, inset, width - inset * 2, height - inset * 2);
+    ctx.setLineDash([CELL * 0.7, CELL * 0.7]);
+    ctx.strokeStyle = '#fff1f2';
+    ctx.strokeRect(inset, inset, width - inset * 2, height - inset * 2);
+    ctx.setLineDash([]);
+    ctx.lineJoin = 'round';
+}
+
+/**
+ * A small map of the whole field in the corner while zoomed in: every worm's head, yours ringed
+ * in white, and a frame around the part you're looking at.
+ */
+function drawMinimap(ctx, world, points, me, view, width, height, opacity) {
+    const mapWidth = Math.min(width * 0.22, 190);
+    const mapHeight = (mapWidth * height) / width;
+    const x0 = width - mapWidth - 12;
+    const y0 = height - mapHeight - 12;
+    const s = mapWidth / width;
+
+    ctx.save();
+    ctx.globalAlpha = opacity;
+    ctx.fillStyle = 'rgba(10, 10, 16, 0.72)';
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.28)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.roundRect(x0, y0, mapWidth, mapHeight, 8);
+    ctx.fill();
+    ctx.stroke();
+    ctx.clip();
+
+    for (const food of world.foods) {
+        if (food.kind === 'fruit' || food.kind === 'power') {
+            circle(ctx, x0 + (food.x + 0.5) * CELL * s, y0 + (food.y + 0.5) * CELL * s, 1.6, food.kind === 'power' ? food.powerUp.color : '#fde68a');
+        }
+    }
+    for (const snake of world.snakes) {
+        const head = points.get(snake)[0];
+        if (!snake.alive || !head) {
+            continue;
+        }
+        const isMe = snake === me;
+        const radius = isMe ? 4 : snake.isPlayer ? 3.2 : 2.4;
+        if (isMe) {
+            circle(ctx, x0 + head.x * s, y0 + head.y * s, radius + 1.8, '#ffffff');
+        }
+        circle(ctx, x0 + head.x * s, y0 + head.y * s, radius, skinOf(snake).color);
+    }
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)';
+    ctx.lineWidth = 1.2;
+    ctx.strokeRect(x0 + view.left * s, y0 + view.top * s, view.width * s, view.height * s);
+    ctx.restore();
+}
+
+/**
+ * One square of the speckled terrazzo floor, drawn once at `resolution` pixels per board pixel.
+ * Chips near an edge are drawn again on the far side so the tile repeats without seams.
+ */
+function drawFloorTile(resolution) {
+    const tile = document.createElement('canvas');
+    tile.width = tile.height = Math.round(FLOOR_TILE * resolution);
+    const ctx = tile.getContext('2d');
+    ctx.scale(resolution, resolution);
+
+    ctx.fillStyle = FLOOR_COLOR;
+    ctx.fillRect(0, 0, FLOOR_TILE, FLOOR_TILE);
+    for (const chip of floorChips()) {
+        ctx.globalAlpha = chip.alpha;
+        ctx.fillStyle = chip.color;
+        for (const dx of [-FLOOR_TILE, 0, FLOOR_TILE]) {
+            for (const dy of [-FLOOR_TILE, 0, FLOOR_TILE]) {
+                ctx.beginPath();
+                chip.corners.forEach(([x, y], i) => (i ? ctx.lineTo(x + dx, y + dy) : ctx.moveTo(x + dx, y + dy)));
+                ctx.closePath();
+                ctx.fill();
+            }
+        }
+    }
+    return tile;
 }
 
 function drawVignette(width, height, scale) {
@@ -859,13 +925,21 @@ function drawVignette(width, height, scale) {
 
     const ctx = vignette.getContext('2d');
     ctx.scale(scale, scale);
-    const gradient = ctx.createRadialGradient(width / 2, height / 2, height * 0.45, width / 2, height / 2, width * 0.72);
+    const gradient = ctx.createRadialGradient(width / 2, height / 2, height * 0.5, width / 2, height / 2, width * 0.75);
     gradient.addColorStop(0, 'rgba(0, 0, 0, 0)');
-    gradient.addColorStop(1, 'rgba(0, 0, 0, 0.45)');
+    gradient.addColorStop(1, 'rgba(0, 0, 0, 0.38)');
     ctx.fillStyle = gradient;
     ctx.fillRect(0, 0, width, height);
 
     return vignette;
+}
+
+/** Fill a closed shape through the corners, in the current fill style. */
+function polygon(ctx, corners) {
+    ctx.beginPath();
+    corners.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+    ctx.closePath();
+    ctx.fill();
 }
 
 function circle(ctx, x, y, radius, color) {
@@ -875,32 +949,6 @@ function circle(ctx, x, y, radius, color) {
     ctx.fill();
 }
 
-/**
- * A diamond (rhombus) centered on x, y, pointing along `angle`.
- */
-function diamond(ctx, x, y, long, wide, angle, color) {
-    const cos = Math.cos(angle);
-    const sin = Math.sin(angle);
-    ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.moveTo(x + cos * long, y + sin * long);
-    ctx.lineTo(x - sin * wide, y + cos * wide);
-    ctx.lineTo(x - cos * long, y - sin * long);
-    ctx.lineTo(x + sin * wide, y - cos * wide);
-    ctx.closePath();
-    ctx.fill();
-}
-
-/**
- * Blend two #rrggbb colors; amount 0 gives the first, 1 the second.
- */
-function mix(from, to, amount) {
-    const a = parseInt(from.slice(1), 16);
-    const b = parseInt(to.slice(1), 16);
-    const channel = (shift) => Math.round(((a >> shift) & 255) + (((b >> shift) & 255) - ((a >> shift) & 255)) * amount);
-    return `#${[16, 8, 0].map((shift) => channel(shift).toString(16).padStart(2, '0')).join('')}`;
-}
-
 function easeOutBack(t) {
     const overshoot = 1.7;
     return 1 + (overshoot + 1) * (t - 1) ** 3 + overshoot * (t - 1) ** 2;
@@ -908,12 +956,4 @@ function easeOutBack(t) {
 
 function easeOutCubic(t) {
     return 1 - (1 - t) ** 3;
-}
-
-function seededRandom(seed) {
-    let value = seed;
-    return () => {
-        value = (value * 16807) % 2147483647;
-        return (value - 1) / 2147483646;
-    };
 }

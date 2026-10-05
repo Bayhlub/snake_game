@@ -1,8 +1,13 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { BOTS, DIRECTIONS, SPAWN_GRACE_MS } from '../../resources/js/snake/config.js';
-import { addPlayer, createWorld, isEffectActive, removePlayer, respawnPlayer, step } from '../../resources/js/snake/world.js';
+import { BOTS, SPAWN_GRACE_MS } from '../../resources/js/snake/config.js';
+import { addPlayer, createWorld, isEffectActive, placeSnake, removePlayer, respawnPlayer, step } from '../../resources/js/snake/world.js';
+
+const RIGHT = 0;
+const LEFT = Math.PI;
+const UP = -Math.PI / 2;
+const DOWN = Math.PI / 2;
 
 function seeded(seed = 5) {
     let value = seed;
@@ -22,10 +27,9 @@ function onlineWorld(...players) {
     world.foodCount = 0;
     return {
         world,
-        players: players.map(({ x, y, dir = 'right', name }) => {
+        players: players.map(({ x, y, angle = RIGHT, name }) => {
             const snake = addPlayer(world, { name, color: '#ffffff' });
-            snake.dir = DIRECTIONS[dir];
-            snake.body = [0, 1, 2, 3].map((i) => ({ x: x - DIRECTIONS[dir].x * i, y: y - DIRECTIONS[dir].y * i }));
+            placeSnake(snake, { x, y }, angle, 4);
             delete snake.effects.grace; // These tests place players on purpose; skip the newcomer protection.
             return snake;
         }),
@@ -46,21 +50,23 @@ test('an online world starts with only bots, and players join with their own ids
 });
 
 test('each player steers separately and scores their own points', () => {
-    const { world, players: [bai, noy] } = onlineWorld({ x: 10, y: 10, name: 'Bai' }, { x: 10, y: 20, name: 'Noy' });
-    world.foods.push({ kind: 'food', x: 10, y: 9, points: 1, grow: 1 });
+    const { world, players: [bai, noy] } = onlineWorld({ x: 10, y: 10, name: 'Bai' }, { x: 10, y: 25, name: 'Noy' });
+    world.foods.push({ kind: 'food', x: 10.6, y: 10, points: 1, grow: 1 });
 
-    step(world, { [bai.id]: DIRECTIONS.up, [noy.id]: DIRECTIONS.down }, 200);
+    for (let i = 0; i < 10; i++) {
+        step(world, { [bai.id]: UP, [noy.id]: DOWN }, 100);
+    }
 
-    assert.deepEqual(bai.body[0], { x: 10, y: 9 });
-    assert.deepEqual(noy.body[0], { x: 10, y: 21 });
+    assert.ok(bai.body[0].y < 9, 'Bai went up');
+    assert.ok(noy.body[0].y > 26, 'Noy went down');
     assert.equal(bai.points, 1);
     assert.equal(noy.points, 0);
 });
 
 test('a crashed player turns into food and waits, while the game goes on for everyone else', () => {
-    const { world, players: [bai, noy] } = onlineWorld({ x: fieldWidth() - 1, y: 10, name: 'Bai' }, { x: 10, y: 20, name: 'Noy' });
+    const { world, players: [bai, noy] } = onlineWorld({ x: fieldWidth() - 0.7, y: 10, name: 'Bai' }, { x: 10, y: 20, name: 'Noy' });
 
-    const events = step(world, {}, 200);
+    const events = step(world, {}, 100);
 
     assert.ok(events.some((event) => event.type === 'playerDied' && event.snake === bai));
     assert.equal(bai.alive, false);
@@ -80,16 +86,16 @@ test('power-ups belong to the player who picked them up', () => {
     const { world, players: [bai, noy] } = onlineWorld({ x: 10, y: 10, name: 'Bai' }, { x: 10, y: 20, name: 'Noy' });
     world.foods.push({ kind: 'power', x: 11, y: 10, powerUp: { type: 'shield', durationMs: 5000 }, points: 0, grow: 0, expiresAt: 99999 });
 
-    step(world, {}, 200);
+    step(world, {}, 100);
 
     assert.ok(isEffectActive(world, 'shield', bai));
     assert.equal(isEffectActive(world, 'shield', noy), false);
 });
 
 test('two players colliding head-on both crash', () => {
-    const { world, players: [bai, noy] } = onlineWorld({ x: 10, y: 10, name: 'Bai' }, { x: 12, y: 10, dir: 'left', name: 'Noy' });
+    const { world, players: [bai, noy] } = onlineWorld({ x: 10, y: 10, name: 'Bai' }, { x: 11.2, y: 10, angle: LEFT, name: 'Noy' });
 
-    step(world, {}, 200);
+    step(world, {}, 100);
 
     assert.equal(bai.alive, false);
     assert.equal(noy.alive, false);
@@ -98,10 +104,10 @@ test('two players colliding head-on both crash', () => {
 });
 
 test('a player who just joined or came back cannot crash into snakes for a moment', () => {
-    const { world, players: [bai, noy] } = onlineWorld({ x: 10, y: 10, name: 'Bai' }, { x: 12, y: 10, dir: 'left', name: 'Noy' });
+    const { world, players: [bai, noy] } = onlineWorld({ x: 10, y: 10, name: 'Bai' }, { x: 11.2, y: 10, angle: LEFT, name: 'Noy' });
     bai.effects.grace = world.time + SPAWN_GRACE_MS;
 
-    step(world, {}, 200);
+    step(world, {}, 100);
     assert.ok(bai.alive, 'protected player survives the head-on crash');
     assert.ok(noy.alive, 'and the other player passes through too');
 

@@ -2,6 +2,7 @@ import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { describePlayerCrash } from '../game/shared';
 import { colors, fonts } from '../theme';
+import { SkinPicker } from './SkinPicker';
 import { Button } from './Ui';
 
 function Overlay({ children, dim = 0.45 }) {
@@ -14,11 +15,13 @@ function Overlay({ children, dim = 0.45 }) {
     );
 }
 
-export function StartOverlay({ t, onStart, onPlayOnline }) {
+export function StartOverlay({ t, skin, onChangeSkin, onStart, onPlayOnline }) {
     return (
         <Overlay>
-            <Text style={styles.bigEmoji}>🐍🍎</Text>
+            <Text style={styles.bigEmoji}>🪱🍬</Text>
             <Text style={styles.title}>{t('ready')}</Text>
+            <Text style={styles.cause}>{t('pickWorm')}</Text>
+            <SkinPicker t={t} value={skin} onChange={onChangeSkin} />
             <Button label={t('startGame')} size="large" onPress={onStart} />
             <Button label={t('playOnline')} variant="ghost" onPress={onPlayOnline} />
         </Overlay>
@@ -26,8 +29,8 @@ export function StartOverlay({ t, onStart, onPlayOnline }) {
 }
 
 /**
- * Online: pick a name and the game server's address (shown when the server starts,
- * e.g. ws://192.168.0.168:8787), then join.
+ * Online: pick a name, then join. The address box only shows when the app has no game server of
+ * its own (`server` is null when it does), for a server on your Wi-Fi such as ws://192.168.0.168:8787.
  */
 export function JoinOverlay({ t, name, onChangeName, server, onChangeServer, onJoin, joining, status, onBack }) {
     return (
@@ -42,22 +45,26 @@ export function JoinOverlay({ t, name, onChangeName, server, onChangeServer, onJ
                     placeholderTextColor="rgba(209, 250, 229, 0.4)"
                     maxLength={20}
                     autoComplete="nickname"
+                    returnKeyType={server === null ? 'go' : 'next'}
+                    onSubmitEditing={server === null ? onJoin : undefined}
                     style={styles.input}
                     accessibilityLabel={t('yourName')}
                 />
-                <TextInput
-                    value={server}
-                    onChangeText={onChangeServer}
-                    placeholder="ws://192.168.0.10:8787"
-                    placeholderTextColor="rgba(209, 250, 229, 0.4)"
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                    keyboardType="url"
-                    returnKeyType="go"
-                    onSubmitEditing={onJoin}
-                    style={styles.input}
-                    accessibilityLabel={t('serverAddress')}
-                />
+                {server !== null && (
+                    <TextInput
+                        value={server}
+                        onChangeText={onChangeServer}
+                        placeholder="ws://192.168.0.10:8787"
+                        placeholderTextColor="rgba(209, 250, 229, 0.4)"
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                        keyboardType="url"
+                        returnKeyType="go"
+                        onSubmitEditing={onJoin}
+                        style={styles.input}
+                        accessibilityLabel={t('serverAddress')}
+                    />
+                )}
                 <Button label={t('join')} onPress={onJoin} disabled={joining} />
                 {status !== '' && (
                     <Text style={styles.status} accessibilityLiveRegion="polite">

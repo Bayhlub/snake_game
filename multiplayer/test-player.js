@@ -1,7 +1,7 @@
 import { WebSocket } from 'ws';
 
 import { MULTIPLAYER_PORT } from '../resources/js/snake/config.js';
-import { createRemoteWorld, directionName } from '../resources/js/snake/net.js';
+import { createRemoteWorld } from '../resources/js/snake/net.js';
 
 /**
  * A pretend friend for trying online play alone: joins as a player, heads for the nearest food,
@@ -47,15 +47,9 @@ socket.on('message', (raw) => {
     }
 
     const head = me.body[0];
-    const distance = (food) => Math.abs(food.x - head.x) + Math.abs(food.y - head.y);
+    const distance = (food) => Math.hypot(food.x - head.x, food.y - head.y);
     const food = world.foods.filter((f) => f.kind !== 'power').sort((a, b) => distance(a) - distance(b))[0];
-    if (!food) {
-        return;
-    }
-    const dx = Math.sign(food.x - head.x);
-    const dy = Math.sign(food.y - head.y);
-    const wanted = dx !== 0 && me.dir.x !== -dx ? { x: dx, y: 0 } : dy !== 0 && me.dir.y !== -dy ? { x: 0, y: dy } : null;
-    if (wanted && (wanted.x !== me.dir.x || wanted.y !== me.dir.y)) {
-        socket.send(JSON.stringify({ type: 'turn', dir: directionName(wanted) }));
+    if (food) {
+        socket.send(JSON.stringify({ type: 'steer', angle: Math.atan2(food.y - head.y, food.x - head.x) }));
     }
 });

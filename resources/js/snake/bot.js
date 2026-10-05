@@ -1,69 +1,63 @@
-import { BOT_CARELESSNESS, DIRECTIONS } from './config.js';
+import { BOT_CARELESSNESS } from './config.js';
+import { isInside, wrapAngle } from './space.js';
 
-const ALL_DIRECTIONS = Object.values(DIRECTIONS);
+/** Headings a bot considers, as turns from where it's going now (radians). */
+const TRIES = [0, -0.35, 0.35, -0.75, 0.75, -1.2, 1.2, -1.7, 1.7, Math.PI];
+/** How far ahead (in cells) a bot looks along each heading for walls and other worms. */
+const LOOK_AHEAD = [1, 2, 3.2, 4.5, 6];
+/** How close (in cells) another worm may come to a bot's path before the bot steers away. */
+const ROOM = 1.3;
 
 /**
- * Pick the next direction for a computer snake: head for the best nearby food,
- * while avoiding walls, other snakes, dead ends and cells another head could reach.
- * Its own body is not an obstacle, because a snake can cross itself.
+ * Pick where a computer worm steers next: toward the best nearby food, while keeping clear of
+ * walls and other worms ahead of it. Its own body is not an obstacle, because a worm can cross
+ * itself. Now and then it doesn't look out for other worms, so bots sometimes make mistakes.
+ * `bodies` is the indexBodies() lookup for this step.
  */
-export function chooseBotDirection(world, bot, grid) {
+export function chooseBotAngle(world, bot, bodies) {
     const head = bot.body[0];
     const target = pickTarget(world, head);
     const careless = world.random() < BOT_CARELESSNESS;
-    const isBlocked = (index) => grid[index] !== 0 && grid[index] !== bot.id + 1;
+    const wanted = target ? Math.atan2(target.y - head.y, target.x - head.x) : bot.targetAngle + (world.random() - 0.5) * 0.5;
 
-    let bestDirection = bot.dir;
+    let best = bot.angle;
     let bestScore = -Infinity;
+    for (const offset of TRIES) {
+        const angle = wrapAngle(bot.angle + offset);
+        let score = -Math.abs(wrapAngle(wanted - angle)) * 10 - Math.abs(offset) + world.random() * 0.5;
 
-    for (const direction of ALL_DIRECTIONS) {
-        if (direction.x === -bot.dir.x && direction.y === -bot.dir.y) {
-            continue;
-        }
-
-        const x = head.x + direction.x;
-        const y = head.y + direction.y;
-        let score = world.random() * 4;
-
-        if (target) {
-            score -= (Math.abs(target.x - x) + Math.abs(target.y - y)) * 10;
-        }
-
-        if (!isInside(world, x, y)) {
-            score -= 1e6;
-        } else if (!careless) {
-            if (isBlocked(y * world.cols + x)) {
-                score -= 1e6;
-            } else {
-                const limit = Math.min(bot.body.length * 2, 80);
-                const space = countReachableCells(world, isBlocked, x, y, limit);
-                if (space < bot.body.length) {
-                    score -= 5000 + (bot.body.length - space) * 100;
-                }
-                if (isNextToOtherHead(world, bot, x, y)) {
-                    score -= 800;
-                }
+        for (const reach of LOOK_AHEAD) {
+            const x = head.x + Math.cos(angle) * reach;
+            const y = head.y + Math.sin(angle) * reach;
+            const blocked = !isInside(world, x, y, 0.9) || (!careless && bodies.near(x, y, ROOM, (entry) => entry.snake !== bot));
+            if (blocked) {
+                score -= 1000 / reach;
+                break;
             }
         }
 
         if (score > bestScore) {
             bestScore = score;
-            bestDirection = direction;
+            best = angle;
         }
     }
 
-    return bestDirection;
+    return best;
 }
 
+/**
+ * The food a bot goes for: the closest, with fruit counting as a bit closer. Bots leave power-ups
+ * alone, and food right by a wall, which they couldn't turn away from in time.
+ */
 function pickTarget(world, head) {
     let best = null;
     let bestDistance = Infinity;
 
     for (const food of world.foods) {
-        if (food.kind === 'power') {
+        if (food.kind === 'power' || !isInside(world, food.x, food.y, 2)) {
             continue;
         }
-        const distance = Math.abs(food.x - head.x) + Math.abs(food.y - head.y) - (food.kind === 'fruit' ? 6 : 0);
+        const distance = Math.hypot(food.x - head.x, food.y - head.y) - (food.kind === 'fruit' ? 5 : 0);
         if (distance < bestDistance) {
             bestDistance = distance;
             best = food;
@@ -71,38 +65,4 @@ function pickTarget(world, head) {
     }
 
     return best;
-}
-
-function countReachableCells(world, isBlocked, startX, startY, limit) {
-    const seen = new Set([startY * world.cols + startX]);
-    const queue = [[startX, startY]];
-
-    while (queue.length && seen.size < limit) {
-        const [x, y] = queue.shift();
-        for (const direction of ALL_DIRECTIONS) {
-            const nx = x + direction.x;
-            const ny = y + direction.y;
-            const index = ny * world.cols + nx;
-            if (isInside(world, nx, ny) && !isBlocked(index) && !seen.has(index)) {
-                seen.add(index);
-                queue.push([nx, ny]);
-            }
-        }
-    }
-
-    return seen.size;
-}
-
-function isNextToOtherHead(world, bot, x, y) {
-    return world.snakes.some((snake) => {
-        if (snake === bot || !snake.alive) {
-            return false;
-        }
-        const head = snake.body[0];
-        return Math.abs(head.x - x) + Math.abs(head.y - y) === 1;
-    });
-}
-
-export function isInside(world, x, y) {
-    return x >= 0 && y >= 0 && x < world.cols && y < world.rows;
 }

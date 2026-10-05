@@ -59,7 +59,7 @@ const MESSAGES = {
         steerMouse: '🖱️ Move your mouse over the board to steer, or use',
         pauseKey: 'pause',
         soundKey: 'sound',
-        steerTouch: '👆 Touch and drag on the board. The snake follows your finger. Or use the buttons.',
+        steerTouch: '👆 Put a finger anywhere on the board and drag the way you want to go, like a joystick. Or use the buttons.',
 
         playOnline: '🌐 Play online',
         joinTitle: 'Play online',
@@ -112,6 +112,22 @@ const MESSAGES = {
         left: 'Left',
         right: 'Right',
         boardLabel: 'Snake game board. Touch and drag to steer.',
+
+        pickWorm: 'Pick your worm',
+        zoomIn: 'Zoom in',
+        zoomOut: 'Zoom out',
+        zoomHint: 'Scroll, pinch or use + and − to zoom.',
+        zoomHintTouch: 'Pinch with two fingers or tap + and − to zoom.',
+        'skin.mint': 'Mint',
+        'skin.gears': 'Gears',
+        'skin.candy': 'Candy',
+        'skin.bee': 'Bee',
+        'skin.galaxy': 'Galaxy',
+        'skin.ocean': 'Ocean',
+        'skin.bubblegum': 'Bubblegum',
+        'skin.rainbow': 'Rainbow',
+        'skin.lava': 'Lava',
+        'skin.zebra': 'Zebra',
     },
 
     lo: {
@@ -165,7 +181,7 @@ const MESSAGES = {
         steerMouse: '🖱️ ເລື່ອນເມົ້າເທິງກະດານເພື່ອບັງຄັບ, ຫຼື ໃຊ້',
         pauseKey: 'ຢຸດ',
         soundKey: 'ສຽງ',
-        steerTouch: '👆 ແຕະ ແລະ ລາກເທິງກະດານ. ງູຈະຕາມນິ້ວຂອງທ່ານ. ຫຼື ໃຊ້ປຸ່ມກົດ.',
+        steerTouch: '👆 ແຕະບ່ອນໃດກໍໄດ້ເທິງກະດານ ແລ້ວລາກໄປທາງທີ່ຢາກໄປ ຄືກັບຈອຍສະຕິກ. ຫຼື ໃຊ້ປຸ່ມກົດ.',
 
         playOnline: '🌐 ຫຼິ້ນອອນລາຍ',
         joinTitle: 'ຫຼິ້ນອອນລາຍ',
@@ -218,6 +234,22 @@ const MESSAGES = {
         left: 'ຊ້າຍ',
         right: 'ຂວາ',
         boardLabel: 'ກະດານເກມງູ. ແຕະແລ້ວລາກເພື່ອບັງຄັບ.',
+
+        pickWorm: 'ເລືອກໜອນຂອງທ່ານ',
+        zoomIn: 'ຊູມເຂົ້າ',
+        zoomOut: 'ຊູມອອກ',
+        zoomHint: 'ເລື່ອນ, ບີບນິ້ວ ຫຼື ກົດ + ແລະ − ເພື່ອຊູມ.',
+        zoomHintTouch: 'ບີບສອງນິ້ວ ຫຼື ແຕະ + ແລະ − ເພື່ອຊູມ.',
+        'skin.mint': 'ມິ້ນ',
+        'skin.gears': 'ເຟືອງ',
+        'skin.candy': 'ເຂົ້າໜົມຫວານ',
+        'skin.bee': 'ເຜິ້ງ',
+        'skin.galaxy': 'ກາແລັກຊີ',
+        'skin.ocean': 'ມະຫາສະໝຸດ',
+        'skin.bubblegum': 'ສີບົວ',
+        'skin.rainbow': 'ຮຸ້ງ',
+        'skin.lava': 'ລາວາ',
+        'skin.zebra': 'ມ້າລາຍ',
     },
 };
 

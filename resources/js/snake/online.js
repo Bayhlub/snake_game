@@ -4,12 +4,12 @@ import { createRemoteWorld } from './net.js';
 const CONNECT_TIMEOUT_MS = 60000;
 
 /**
- * Join the online game at `url` as `name`. The callbacks report how it goes:
+ * Join the online game at `url` as `name`, wearing `skin` (an id from skins.js). The callbacks report how it goes:
  * onJoined(world) once the server has given us a snake, onState(world, events) after every move,
  * onFailed(reason) if we can't join ('offline' or 'full'), onClosed() if the connection drops later.
  * Returns { send(message), leave() }.
  */
-export function connectOnline(url, name, { onJoined, onState, onFailed, onClosed }) {
+export function connectOnline(url, name, { skin = null, onJoined, onState, onFailed, onClosed }) {
     const world = createRemoteWorld();
     let socket;
     let joined = false;
@@ -32,7 +32,7 @@ export function connectOnline(url, name, { onJoined, onState, onFailed, onClosed
 
     const timeout = setTimeout(() => !joined && fail('offline'), CONNECT_TIMEOUT_MS);
 
-    socket.onopen = () => socket.send(JSON.stringify({ type: 'join', name }));
+    socket.onopen = () => socket.send(JSON.stringify({ type: 'join', name, skin }));
     socket.onerror = () => !joined && fail('offline');
     socket.onclose = () => {
         clearTimeout(timeout);

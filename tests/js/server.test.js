@@ -4,6 +4,7 @@ import { after, before, test } from 'node:test';
 
 import { WebSocket } from 'ws';
 
+import { START_LENGTH } from '../../resources/js/snake/config.js';
 import { createRemoteWorld } from '../../resources/js/snake/net.js';
 
 const PORT = 18787;
@@ -16,8 +17,8 @@ before(async () => {
 
 after(() => server.kill());
 
-/** Connect, join as `name`, and collect what the server sends. */
-async function join(name) {
+/** Connect, join as `name` (wearing `skin`, if given), and collect what the server sends. */
+async function join(name, skin) {
     const socket = new WebSocket(`ws://localhost:${PORT}`);
     const client = { socket, messages: [], world: createRemoteWorld() };
     socket.on('message', (raw) => {
@@ -30,7 +31,7 @@ async function join(name) {
         }
     });
     await new Promise((resolve) => socket.on('open', resolve));
-    socket.send(JSON.stringify({ type: 'join', name }));
+    socket.send(JSON.stringify({ type: 'join', name, ...(skin ? { skin } : {}) }));
     return client;
 }
 
@@ -57,13 +58,13 @@ test('two players join the same board and each sees both snakes move', async () 
     const before = bai.world.time;
     await until(() => bai.world.time > before + 400);
     const me = bai.world.me();
-    assert.ok(me && me.alive && me.body.length === 4);
+    assert.ok(me && me.alive && me.body.length === START_LENGTH);
     assert.ok(me.previousBody, 'snakes keep their previous position so they can glide');
 
-    const heading = me.dir;
-    const turn = heading.x === 0 ? 'left' : 'up';
-    bai.socket.send(JSON.stringify({ type: 'turn', dir: turn }));
-    await until(() => bai.world.me().dir.x !== heading.x || bai.world.me().dir.y !== heading.y);
+    // Steer the opposite way: the worm turns around, a little each move.
+    const heading = me.angle;
+    bai.socket.send(JSON.stringify({ type: 'steer', angle: heading + Math.PI }));
+    await until(() => Math.abs(Math.atan2(Math.sin(bai.world.me().angle - heading), Math.cos(bai.world.me().angle - heading))) > 2);
 
     noy.socket.close();
     await until(() => !bai.world.snakes.some((snake) => snake.name === 'Noy'));
@@ -75,4 +76,19 @@ test('names are trimmed and shortened', async () => {
     await until(() => long.world.me());
     assert.equal(long.world.me().name, 'A name that is much ');
     long.socket.close();
+});
+
+test('players wear the skin they picked, and an app that picks none gets one nobody wears', async () => {
+    const lin = await join('Lin', 'galaxy');
+    const old = await join('Old app');
+    const sneaky = await join('Sneaky', 'not-a-skin');
+    await until(() => lin.world.me() && old.world.me() && sneaky.world.me());
+
+    assert.equal(lin.world.me().skin, 'galaxy');
+    assert.equal(lin.world.me().color, '#7c3aed');
+    assert.ok(old.world.me().skin && old.world.me().skin !== 'galaxy');
+    assert.ok(!['galaxy', old.world.me().skin].includes(sneaky.world.me().skin));
+    for (const client of [lin, old, sneaky]) {
+        client.socket.close();
+    }
 });

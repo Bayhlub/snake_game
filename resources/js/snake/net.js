@@ -1,21 +1,18 @@
-import { DIRECTIONS, POWER_UPS } from './config.js';
+import { POWER_UPS } from './config.js';
 
 /**
  * The messages between the multiplayer server and the game on each device.
  *
- * Device → server: { type: 'join', name }, { type: 'turn', dir: 'up' }, { type: 'respawn' }
+ * Device → server: { type: 'join', name, skin }, { type: 'steer', angle } (radians), { type: 'respawn' }
  * Server → device: { type: 'welcome', id }, { type: 'full' },
  *                  { type: 'state', state, events } after every move (see packWorld / packEvent).
  *
- * Snakes and foods are packed small (bodies as flat [x, y, x, y, …] lists) because the whole
- * board goes to every player several times a second.
+ * Snakes and foods are packed small (bodies as flat [x, y, x, y, …] lists, to two decimals)
+ * because the whole board goes to every player several times a second.
  */
-const DIRECTION_NAMES = Object.fromEntries(Object.entries(DIRECTIONS).map(([name, dir]) => [`${dir.x},${dir.y}`, name]));
 const POWER_UPS_BY_TYPE = Object.fromEntries(POWER_UPS.map((powerUp) => [powerUp.type, powerUp]));
-
-export function directionName(dir) {
-    return DIRECTION_NAMES[`${dir.x},${dir.y}`];
-}
+const round = (value) => Math.round(value * 100) / 100;
+const roundPoint = (point) => ({ x: round(point.x), y: round(point.y) });
 
 export function packWorld(world, tickMs) {
     return {
@@ -27,17 +24,18 @@ export function packWorld(world, tickMs) {
             id: snake.id,
             name: snake.name,
             color: snake.color,
+            ...(snake.skin ? { skin: snake.skin } : {}),
             isPlayer: snake.isPlayer,
             alive: snake.alive,
-            dir: directionName(snake.dir),
-            body: snake.body.flatMap((cell) => [cell.x, cell.y]),
+            angle: Math.round(snake.angle * 1000) / 1000,
+            body: snake.body.flatMap((point) => [round(point.x), round(point.y)]),
             ...(snake.isPlayer ? { points: snake.points, effects: snake.effects, spawnedAt: snake.spawnedAt } : {}),
         })),
         foods: world.foods.map((food) => ({
             kind: food.kind,
-            x: food.x,
-            y: food.y,
-            ...(food.from ? { from: food.from } : {}),
+            x: round(food.x),
+            y: round(food.y),
+            ...(food.from ? { from: roundPoint(food.from) } : {}),
             ...(food.emoji ? { emoji: food.emoji } : {}),
             ...(food.color ? { color: food.color } : {}),
             ...(food.powerUp ? { powerUp: food.powerUp.type } : {}),
@@ -51,8 +49,8 @@ export function packEvent(event) {
     return {
         type: event.type,
         snakeId: event.snake?.id,
-        ...(event.at ? { at: event.at } : {}),
-        ...(event.food ? { food: { kind: event.food.kind, x: event.food.x, y: event.food.y, points: event.food.points, color: event.food.color } } : {}),
+        ...(event.at ? { at: roundPoint(event.at) } : {}),
+        ...(event.food ? { food: { kind: event.food.kind, ...roundPoint(event.food), points: event.food.points, color: event.food.color } } : {}),
         ...(event.powerUp ? { powerUp: event.powerUp.type } : {}),
         ...(event.cause ? { cause: { type: event.cause.type, otherId: event.cause.other?.id } } : {}),
     };
@@ -63,7 +61,7 @@ export function packEvent(event) {
  * last one as `previousBody`, so the renderers can glide snakes between moves as in solo play.
  */
 export function createRemoteWorld() {
-    const world = { multiplayer: true, cols: 0, rows: 0, time: 0, snakes: [], foods: [], meId: null, tickMs: 220 };
+    const world = { multiplayer: true, cols: 0, rows: 0, time: 0, snakes: [], foods: [], meId: null, tickMs: 100 };
     const byId = new Map();
 
     world.update = (state) => {
@@ -81,12 +79,15 @@ export function createRemoteWorld() {
                 body.push({ x: packed.body[i], y: packed.body[i + 1] });
             }
             const wasMoving = snake.alive && packed.alive && snake.body.length > 0;
+            const angle = packed.angle ?? 0;
             Object.assign(snake, {
                 name: packed.name,
                 color: packed.color,
+                skin: packed.skin ?? null,
                 isPlayer: packed.isPlayer,
                 alive: packed.alive,
-                dir: DIRECTIONS[packed.dir],
+                angle,
+                dir: { x: Math.cos(angle), y: Math.sin(angle) },
                 previousBody: wasMoving ? snake.body : null,
                 body,
                 points: packed.points ?? 0,

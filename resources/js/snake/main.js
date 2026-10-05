@@ -1,10 +1,13 @@
-import { BOTS, COLS, DIRECTIONS, MULTIPLAYER_PORT, ROWS } from './config.js';
+import { DEFAULT_ZOOM, clampZoom } from './camera.js';
+import { BOTS, COLS, DIRECTION_ANGLES, MULTIPLAYER_PORT, ROWS } from './config.js';
 import { describeBotCrash, describePlayerCrash, pickLanguage, translator } from './i18n.js';
 import { connectOnline } from './online.js';
-import { createRenderer } from './renderer.js';
+import { createRenderer, drawSkinPreview } from './renderer.js';
+import { SKINS, skinById } from './skins.js';
 import { createSound } from './sound.js';
-import { directionToward } from './steering.js';
-import { activePowerUps, createWorld, getPlayer, isReverse, step, tickDuration } from './world.js';
+import { wrapAngle } from './space.js';
+import { stickVector } from './steering.js';
+import { activePowerUps, createWorld, getPlayer, step, tickDuration } from './world.js';
 
 const KEY_DIRECTIONS = {
     ArrowUp: 'up',
@@ -16,7 +19,8 @@ const KEY_DIRECTIONS = {
     a: 'left',
     d: 'right',
 };
-const MAX_QUEUED_TURNS = 3;
+/** Each +/− press or key zooms by this much; the mouse wheel zooms smoothly. */
+const ZOOM_STEP = 1.25;
 
 const storage = {
     get(key) {
@@ -77,6 +81,9 @@ export function startSnakeGame(root) {
         onlinePanel: $('#online-panel'),
         onlinePlayers: $('#online-players'),
         onlinePlayerRow: $('#online-player-row'),
+        skinPicker: $('#skin-picker'),
+        skinOption: $('#skin-option'),
+        zoomControls: $('#zoom-controls'),
     };
 
     let language = pickLanguage(storage.get('snake.lang'), navigator.languages ?? [navigator.language]);
@@ -88,10 +95,22 @@ export function startSnakeGame(root) {
     });
     const sound = createSound(storage.get('snake.muted') === '1');
 
-    let world = createWorld();
+    let skin = skinById(storage.get('snake.skin')).id;
+    let zoom = clampZoom(Number(storage.get('snake.zoom')) || DEFAULT_ZOOM);
+    let world = createWorld(Math.random, { skin });
     let state = 'ready';
-    let turnQueue = [];
-    let pointerTarget = null;
+    /** An arrow key or button pressed since the last step: the worm turns to head that way. */
+    let keyTurn = null;
+    /** Where the mouse or finger is steering, as fractions of the board's size (null when not steering). */
+    let mouse = null;
+    /**
+     * Touch steering is a joystick, like Worms Zone: where the finger went down (`base`) and where it
+     * is now (`knob`), as fractions of the board's size, plus where it went down on the page.
+     */
+    let stick = null;
+    /** Touch points on the board, to zoom with two fingers: id => { x, y }. */
+    const touches = new Map();
+    let pinch = null;
     let accumulated = 0;
     let lastFrame = performance.now();
     let best = Number(storage.get('snake.best')) || 0;
@@ -109,6 +128,7 @@ export function startSnakeGame(root) {
 
     elements.playerName.value = storage.get('snake.name') ?? '';
     elements.joinName.value = elements.playerName.value;
+    renderSkinPicker();
     loadLeaderboard();
     applyLanguage();
     updateHud();
@@ -117,15 +137,16 @@ export function startSnakeGame(root) {
     function newGame() {
         if (online) {
             online.connection.send({ type: 'respawn' });
-            pointerTarget = null;
+            online.sentAngle = null;
+            stopSteering();
             state = 'playing';
             showOverlay(null);
             document.activeElement?.blur();
             return;
         }
-        world = createWorld();
-        turnQueue = [];
-        pointerTarget = null;
+        world = createWorld(Math.random, { skin });
+        keyTurn = null;
+        stopSteering();
         accumulated = 0;
         state = 'playing';
         showOverlay(null);
@@ -149,10 +170,10 @@ export function startSnakeGame(root) {
     }
 
     function queueTurn(name) {
-        pointerTarget = null;
+        stopSteering();
         if (online) {
             if (state === 'playing') {
-                online.connection.send({ type: 'turn', dir: name });
+                sendSteer(DIRECTION_ANGLES[name], true);
             }
             return;
         }
@@ -163,21 +184,27 @@ export function startSnakeGame(root) {
             return;
         }
 
-        const direction = DIRECTIONS[name];
-        const previous = turnQueue.at(-1) ?? getPlayer(world).dir;
-        if (direction === previous || isReverse(direction, previous) || turnQueue.length >= MAX_QUEUED_TURNS) {
-            return;
+        keyTurn = DIRECTION_ANGLES[name];
+    }
+
+    /**
+     * Online: tell the server where the worm should head, when that has changed (or `always`).
+     */
+    function sendSteer(angle, always = false) {
+        if (always || online.sentAngle === null || Math.abs(wrapAngle(angle - online.sentAngle)) > 0.02) {
+            online.connection.send({ type: 'steer', angle: Math.round(angle * 1000) / 1000 });
+            online.sentAngle = angle;
         }
-        turnQueue.push(direction);
     }
 
     function frame(now) {
         const elapsed = Math.min(now - lastFrame, 250);
         lastFrame = now;
+        updateZoomControls();
 
         if (online) {
             const progress = Math.min((now - online.lastStateAt) / online.world.tickMs, 1);
-            renderer.draw(online.world, now, progress, state === 'playing' ? pointerTarget : null);
+            renderer.draw(online.world, now, progress, ...aimFor(online.world.me(), { zoom, follow: state === 'playing' }));
             requestAnimationFrame(frame);
             return;
         }
@@ -188,7 +215,8 @@ export function startSnakeGame(root) {
 
             while (accumulated >= duration && state === 'playing') {
                 accumulated -= duration;
-                const turn = turnQueue.shift() ?? (pointerTarget && directionToward(getPlayer(world), pointerTarget, world));
+                const turn = keyTurn ?? steerTurn(getPlayer(world));
+                keyTurn = null;
                 handleEvents(step(world, turn, duration), duration - accumulated);
                 updateHud();
 
@@ -201,8 +229,48 @@ export function startSnakeGame(root) {
         }
 
         const isMoving = state === 'playing' || state === 'paused';
-        renderer.draw(world, now, isMoving ? Math.min(accumulated / tickDuration(world), 1) : 1, state === 'playing' ? pointerTarget : null);
+        renderer.draw(world, now, isMoving ? Math.min(accumulated / tickDuration(world), 1) : 1, ...aimFor(getPlayer(world), { zoom, follow: isMoving }));
         requestAnimationFrame(frame);
+    }
+
+    function stopSteering() {
+        mouse = null;
+        stick = null;
+    }
+
+    /**
+     * Which way the player is steering, in cells: the touch joystick, or from the worm's head toward
+     * the mouse. Null when not steering (the worm keeps going straight).
+     */
+    function steerVector(snake) {
+        if (state !== 'playing' || !snake?.alive) {
+            return null;
+        }
+        if (stick) {
+            return stickVector(stick, shownWorld().cols, shownWorld().rows);
+        }
+        if (mouse) {
+            const point = renderer.pointAt(mouse.fx, mouse.fy);
+            const vector = { x: point.x - snake.body[0].x, y: point.y - snake.body[0].y };
+            return Math.hypot(vector.x, vector.y) < 1.5 ? null : vector;
+        }
+        return null;
+    }
+
+    /** The heading (radians) to steer toward for the stick or mouse, or null to keep going. */
+    function steerTurn(snake) {
+        const vector = steerVector(snake);
+        return vector ? Math.atan2(vector.y, vector.x) : null;
+    }
+
+    /**
+     * What the renderer needs to show the steering: a spot for the worm's eyes to look at, and the
+     * joystick ring and the arrow in front of the worm.
+     */
+    function aimFor(snake, view) {
+        const aim = steerVector(snake);
+        const lookAt = aim ? { x: snake.body[0].x + aim.x, y: snake.body[0].y + aim.y } : null;
+        return [lookAt, { ...view, aim, stick: state === 'playing' ? stick : null }];
     }
 
     function handleEvents(events, effectDelayMs) {
@@ -276,11 +344,12 @@ export function startSnakeGame(root) {
         }, 4000);
 
         const connection = connectOnline(multiplayerUrl(), name, {
+            skin,
             onJoined(remote) {
                 clearTimeout(slowNotice);
-                online = { connection, world: remote, lastStateAt: performance.now(), lastLength: remote.me().body.length };
+                online = { connection, world: remote, lastStateAt: performance.now(), lastLength: remote.me().body.length, sentAngle: null };
                 state = 'playing';
-                pointerTarget = null;
+                stopSteering();
                 elements.joinButton.disabled = false;
                 elements.joinStatus.textContent = '';
                 elements.leaveOnline.hidden = false;
@@ -300,11 +369,9 @@ export function startSnakeGame(root) {
                 if (player?.alive) {
                     online.lastLength = player.body.length;
                 }
-                if (state === 'playing' && pointerTarget && player?.alive) {
-                    const turn = directionToward(player, pointerTarget, remote);
-                    if (turn) {
-                        online.connection.send({ type: 'turn', dir: Object.keys(DIRECTIONS).find((key) => DIRECTIONS[key] === turn) });
-                    }
+                const angle = player?.alive ? steerTurn(player) : null;
+                if (angle !== null) {
+                    sendSteer(angle);
                 }
                 updateHud();
                 renderOnlinePlayers();
@@ -336,7 +403,7 @@ export function startSnakeGame(root) {
     function leaveOnline() {
         online?.connection.leave();
         online = null;
-        world = createWorld();
+        world = createWorld(Math.random, { skin });
         state = 'ready';
         result = null;
         elements.leaveOnline.hidden = true;
@@ -522,6 +589,7 @@ export function startSnakeGame(root) {
         });
 
         updateSoundToggle();
+        updateSkinPicker();
         updateHud();
         if (saveStatus) {
             setSaveStatus(saveStatus.key, saveStatus.params);
@@ -581,39 +649,145 @@ export function startSnakeGame(root) {
             setPaused(state === 'playing');
         } else if (event.key === 'm' || event.key === 'M') {
             toggleSound();
+        } else if ((event.key === '+' || event.key === '=') && isFollowing()) {
+            setZoom(zoom * ZOOM_STEP);
+        } else if (event.key === '-' && isFollowing()) {
+            setZoom(zoom / ZOOM_STEP);
         }
     });
 
+    /** The camera follows your worm (and zoom works) while a game is going. */
+    function isFollowing() {
+        return state === 'playing' || (state === 'paused' && !online);
+    }
+
+    function setZoom(next) {
+        zoom = clampZoom(next);
+        storage.set('snake.zoom', zoom.toFixed(2));
+    }
+
+    function updateZoomControls() {
+        elements.zoomControls.hidden = !isFollowing();
+    }
+
     /**
-     * Mouse: the snake follows the pointer while it is over the board.
-     * Touch: the snake follows the finger while it is down, then keeps going straight.
+     * The skins to choose from on the start screen, each drawn as a little worm.
      */
-    function pointerCell(event) {
+    function renderSkinPicker() {
+        elements.skinPicker.replaceChildren(
+            ...SKINS.map((option) => {
+                const button = elements.skinOption.content.firstElementChild.cloneNode(true);
+                button.dataset.skin = option.id;
+                drawSkinPreview(button.querySelector('canvas'), option);
+                button.addEventListener('click', () => setSkin(option.id));
+                return button;
+            }),
+        );
+        updateSkinPicker();
+    }
+
+    function updateSkinPicker() {
+        for (const button of elements.skinPicker.children) {
+            button.setAttribute('aria-pressed', String(button.dataset.skin === skin));
+            button.setAttribute('aria-label', t(`skin.${button.dataset.skin}`));
+            button.title = t(`skin.${button.dataset.skin}`);
+        }
+    }
+
+    function setSkin(id) {
+        skin = skinById(id).id;
+        storage.set('snake.skin', skin);
+        if (state === 'ready' && !online) {
+            world = createWorld(Math.random, { skin });
+        }
+        updateSkinPicker();
+    }
+
+    /**
+     * Mouse: the worm heads toward the pointer while it is over the board.
+     * Touch: a joystick, like Worms Zone. Put a finger down anywhere and drag the way you want to go;
+     * lift it and the worm keeps going straight. Two fingers zoom.
+     */
+    function pointerAt(event) {
         const rect = elements.canvas.getBoundingClientRect();
         return {
-            x: Math.min(COLS - 1, Math.max(0, Math.floor(((event.clientX - rect.left) / rect.width) * COLS))),
-            y: Math.min(ROWS - 1, Math.max(0, Math.floor(((event.clientY - rect.top) / rect.height) * ROWS))),
+            fx: Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width)),
+            fy: Math.min(1, Math.max(0, (event.clientY - rect.top) / rect.height)),
         };
+    }
+
+    function touchSpread() {
+        const [a, b] = [...touches.values()];
+        return Math.hypot(a.x - b.x, a.y - b.y) || 1;
     }
 
     elements.canvas.addEventListener('pointerdown', (event) => {
         if (event.pointerType !== 'mouse') {
             elements.canvas.setPointerCapture(event.pointerId);
+            touches.set(event.pointerId, { x: event.clientX, y: event.clientY });
+            if (touches.size === 2) {
+                pinch = { spread: touchSpread(), zoom };
+                stopSteering();
+                return;
+            }
         }
-        pointerTarget = pointerCell(event);
+        if (pinch) {
+            return;
+        }
+        if (event.pointerType === 'mouse') {
+            mouse = pointerAt(event);
+        } else {
+            const at = pointerAt(event);
+            stick = { base: at, knob: at, x: event.clientX, y: event.clientY };
+        }
     });
     elements.canvas.addEventListener('pointermove', (event) => {
-        if (event.pointerType === 'mouse' || elements.canvas.hasPointerCapture(event.pointerId)) {
-            pointerTarget = pointerCell(event);
+        if (touches.has(event.pointerId)) {
+            touches.set(event.pointerId, { x: event.clientX, y: event.clientY });
+        }
+        if (pinch && touches.size >= 2) {
+            if (isFollowing()) {
+                setZoom(pinch.zoom * (touchSpread() / pinch.spread));
+            }
+            return;
+        }
+        if (event.pointerType === 'mouse') {
+            mouse = pointerAt(event);
+        } else if (stick && elements.canvas.hasPointerCapture(event.pointerId)) {
+            // Only how far the finger moved matters, so it can wander past the board's edge.
+            const rect = elements.canvas.getBoundingClientRect();
+            stick.knob = { fx: stick.base.fx + (event.clientX - stick.x) / rect.width, fy: stick.base.fy + (event.clientY - stick.y) / rect.height };
         }
     });
     for (const type of ['pointerup', 'pointercancel']) {
         elements.canvas.addEventListener(type, (event) => {
+            touches.delete(event.pointerId);
+            if (touches.size < 2) {
+                pinch = null;
+            }
             if (event.pointerType !== 'mouse') {
-                pointerTarget = null;
+                stick = null;
             }
         });
     }
+    elements.canvas.addEventListener(
+        'wheel',
+        (event) => {
+            if (isFollowing()) {
+                event.preventDefault();
+                setZoom(zoom * Math.exp(-event.deltaY * 0.0015));
+            }
+        },
+        { passive: false },
+    );
+    $('#zoom-in').addEventListener('click', (event) => {
+        setZoom(zoom * ZOOM_STEP);
+        event.currentTarget.blur();
+    });
+    $('#zoom-out').addEventListener('click', (event) => {
+        setZoom(zoom / ZOOM_STEP);
+        event.currentTarget.blur();
+    });
 
     root.querySelectorAll('[data-direction]').forEach((button) => {
         button.addEventListener('pointerdown', (event) => {

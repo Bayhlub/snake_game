@@ -1,4 +1,4 @@
-import { chooseBotDirection, isInside } from './bot.js';
+import { chooseBotAngle } from './bot.js';
 import {
     BOT_MAX_LENGTH,
     BOT_RESPAWN_MS,
@@ -6,16 +6,19 @@ import {
     BOTS,
     CELLS_PER_FOOD,
     COLS,
-    DIRECTIONS,
     DROP_LIFETIME_MS,
+    EAT_DISTANCE,
     FOOD,
     FRUIT_LIFETIME_MS,
     FRUIT_SPAWN_MAX_MS,
     FRUIT_SPAWN_MIN_MS,
     FRUITS,
+    HIT_DISTANCE,
     MAGNET_RADIUS,
+    MAGNET_SPEED,
     MAX_FRUITS,
-    MIN_TICK_MS,
+    MAX_SPEED,
+    MULTIPLAYER_SPEED,
     MULTIPLAYER_TICK_MS,
     PLAYER,
     POWER_UP_LIFETIME_MS,
@@ -23,23 +26,32 @@ import {
     POWER_UP_SPAWN_MIN_MS,
     POWER_UPS,
     ROWS,
+    SEGMENT_SPACING,
     SHIELD_GRACE_MS,
     SLOW_MO_FACTOR,
     SPAWN_GRACE_MS,
+    SPEED_PER_SEGMENT,
     START_LENGTH,
-    START_TICK_MS,
-    TICK_MS_PER_SEGMENT,
+    START_SPEED,
+    TICK_MS,
+    TURN_RATE,
 } from './config.js';
+import { skinById } from './skins.js';
+import { indexBodies, isInside, wrapAngle } from './space.js';
 
 /**
  * Create a fresh game: bots spread around and food on the board.
  * The field is COLS × ROWS unless `cols` and `rows` say otherwise (the phone app turns it upright).
  *
+ * Worms glide at any angle, like Worms Zone: each has a heading (`angle`) that turns toward where it's
+ * steered (`targetAngle`), a trail of where its head has been, and a body of points one segment apart
+ * along that trail. Positions are in cells (floats).
+ *
  * Solo (the default): one player starts on the left, and the game is over when it crashes.
  * Multiplayer: players join and leave with addPlayer / removePlayer; a crashed player turns
  * into food like a bot and waits for respawnPlayer, while the game carries on for everyone else.
  */
-export function createWorld(random = Math.random, { cols = COLS, rows = ROWS, multiplayer = false } = {}) {
+export function createWorld(random = Math.random, { cols = COLS, rows = ROWS, multiplayer = false, skin = PLAYER.skin } = {}) {
     const world = {
         cols,
         rows,
@@ -67,12 +79,8 @@ export function createWorld(random = Math.random, { cols = COLS, rows = ROWS, mu
     });
 
     if (!multiplayer) {
-        const player = makeSnake(0, PLAYER, true);
-        const headX = 8;
-        const headY = Math.floor(rows / 2);
-        player.dir = DIRECTIONS.right;
-        player.body = Array.from({ length: START_LENGTH }, (_, i) => ({ x: headX - i, y: headY }));
-        player.alive = true;
+        const player = makeSnake(0, { name: PLAYER.name, color: skinById(skin).color, skin: skinById(skin).id }, true);
+        placeSnake(player, { x: 8, y: Math.floor(rows / 2) }, 0, START_LENGTH);
         world.snakes.push(player);
     }
 
@@ -90,8 +98,8 @@ export function createWorld(random = Math.random, { cols = COLS, rows = ROWS, mu
 /**
  * Multiplayer: add a player to a random empty spot. Returns its snake.
  */
-export function addPlayer(world, { name, color }) {
-    const snake = makeSnake(freeId(world), { name, color }, true);
+export function addPlayer(world, { name, color, skin = null }) {
+    const snake = makeSnake(freeId(world), { name, color, skin }, true);
     world.snakes.push(snake);
     spawnSnake(world, snake);
     protectNewcomer(world, snake);
@@ -111,7 +119,7 @@ export function removePlayer(world, id) {
 }
 
 /**
- * Multiplayer: bring a crashed player back as a fresh four-segment snake with no points.
+ * Multiplayer: bring a crashed player back as a fresh short worm with no points.
  */
 export function respawnPlayer(world, snake) {
     snake.points = 0;
@@ -127,18 +135,23 @@ export function getPlayer(world) {
     return world.snakes[0];
 }
 
-/**
- * How long one move takes. Solo, the game speeds up as the player grows; online it keeps an
- * even pace for everyone. Slow-mo stretches it (online, for everyone while anyone has it).
- */
+/** How long one step of the game is: short solo for smooth play, the server's pace online. */
 export function tickDuration(world) {
-    let duration = MULTIPLAYER_TICK_MS;
+    return world.multiplayer ? MULTIPLAYER_TICK_MS : TICK_MS;
+}
+
+/**
+ * How fast every worm moves, in cells per second. Solo the game speeds up as the player grows;
+ * online it keeps an even pace. Slow-mo slows everyone down (online, while anyone has it).
+ */
+export function worldSpeed(world) {
+    let speed = MULTIPLAYER_SPEED;
     if (!world.multiplayer) {
         const growth = getPlayer(world).body.length - START_LENGTH;
-        duration = Math.max(MIN_TICK_MS, START_TICK_MS - growth * TICK_MS_PER_SEGMENT);
+        speed = Math.min(MAX_SPEED, START_SPEED + Math.max(0, growth) * SPEED_PER_SEGMENT);
     }
     const slowed = world.snakes.some((snake) => snake.isPlayer && isEffectActive(world, 'slow', snake));
-    return slowed ? duration * SLOW_MO_FACTOR : duration;
+    return slowed ? speed / SLOW_MO_FACTOR : speed;
 }
 
 export function isEffectActive(world, type, snake = getPlayer(world)) {
@@ -156,14 +169,16 @@ export function activePowerUps(world, snake = getPlayer(world)) {
 }
 
 /**
- * Advance the game by one move and return what happened (eating, crashes, power-ups).
- * `turns` is the solo player's new direction, or, online, { [snake id]: direction }.
+ * Advance the game by `elapsedMs` and return what happened (eating, crashes, power-ups).
+ * `turns` is where the solo player is steering (an angle in radians, or null to keep the heading),
+ * or, online, { [snake id]: angle }.
  */
 export function step(world, turns, elapsedMs) {
     const events = [];
+    const seconds = elapsedMs / 1000;
     world.time += elapsedMs;
     const players = world.snakes.filter((snake) => snake.isPlayer);
-    const turnFor = (snake) => (turns && 'x' in turns ? (snake === getPlayer(world) ? turns : null) : turns?.[snake.id]);
+    const turnFor = (snake) => (typeof turns === 'number' ? (snake === getPlayer(world) ? turns : null) : turns?.[snake.id]);
 
     for (const player of players) {
         for (const powerUp of POWER_UPS) {
@@ -181,29 +196,22 @@ export function step(world, turns, elapsedMs) {
     updateFruit(world);
     updatePowerUps(world);
 
-    const grid = occupancyGrid(world);
     const movers = world.snakes.filter((snake) => snake.alive);
-
+    const bodies = indexBodies(world);
     for (const snake of movers) {
         if (snake.isPlayer) {
             const turn = turnFor(snake);
-            if (turn && !isReverse(turn, snake.dir)) {
-                snake.dir = turn;
+            if (Number.isFinite(turn)) {
+                snake.targetAngle = wrapAngle(turn);
             }
         } else {
-            snake.dir = chooseBotDirection(world, snake, grid);
+            snake.targetAngle = chooseBotAngle(world, snake, bodies);
         }
     }
 
+    const distance = worldSpeed(world) * seconds;
     for (const snake of movers) {
-        const head = snake.body[0];
-        snake.previousBody = snake.body.map((cell) => ({ ...cell }));
-        snake.body.unshift({ x: head.x + snake.dir.x, y: head.y + snake.dir.y });
-        if (snake.growth > 0) {
-            snake.growth--;
-        } else {
-            snake.body.pop();
-        }
+        moveSnake(snake, distance, TURN_RATE * seconds);
     }
 
     const crashes = findCrashes(world, movers);
@@ -222,15 +230,14 @@ export function step(world, turns, elapsedMs) {
 
     for (const snake of movers) {
         if (snake.alive) {
-            const food = takeFoodAt(world, snake, snake.body[0]);
-            if (food) {
+            for (const food of takeFoodNear(world, snake)) {
                 events.push(eat(world, snake, food));
             }
         }
     }
 
     for (const player of players) {
-        events.push(...pullFoodToPlayer(world, player));
+        events.push(...pullFoodToPlayer(world, player, seconds));
     }
     refillFood(world);
 
@@ -238,34 +245,87 @@ export function step(world, turns, elapsedMs) {
 }
 
 /**
- * The shield takes the hit instead of the player. Hitting a wall bounces the snake
- * back and turns it toward open space; then it can't hit snakes for a moment.
+ * Turn toward where the worm is steered (no faster than `maxTurn`), glide `distance` cells forward,
+ * and lay the body out along the trail behind the head.
+ */
+function moveSnake(snake, distance, maxTurn) {
+    const turn = wrapAngle(snake.targetAngle - snake.angle);
+    snake.angle = wrapAngle(snake.angle + Math.max(-maxTurn, Math.min(maxTurn, turn)));
+    snake.dir = { x: Math.cos(snake.angle), y: Math.sin(snake.angle) };
+
+    const head = snake.trail[0];
+    snake.previousBody = snake.body.map((point) => ({ ...point }));
+    snake.trail.unshift({ x: head.x + snake.dir.x * distance, y: head.y + snake.dir.y * distance });
+    layBody(snake);
+}
+
+/**
+ * The body: points SEGMENT_SPACING apart along the trail, from the head back, `snake.length` of
+ * them (fewer while it's still growing into a new length). The trail is trimmed to what's used.
+ */
+function layBody(snake) {
+    const { trail } = snake;
+    const body = [{ ...trail[0] }];
+    let { x, y } = trail[0];
+    let toNext = SEGMENT_SPACING;
+    let used = 0;
+
+    for (let i = 1; i < trail.length && body.length < snake.length; i++) {
+        let left = Math.hypot(trail[i].x - x, trail[i].y - y);
+        while (left >= toNext && body.length < snake.length) {
+            const t = toNext / left;
+            x += (trail[i].x - x) * t;
+            y += (trail[i].y - y) * t;
+            body.push({ x, y });
+            left -= toNext;
+            toNext = SEGMENT_SPACING;
+        }
+        used = i;
+        if (body.length < snake.length) {
+            toNext -= left;
+            x = trail[i].x;
+            y = trail[i].y;
+        }
+    }
+
+    trail.length = Math.min(trail.length, used + 1);
+    snake.body = body;
+}
+
+/** Put a worm down with its head at `head`, facing `angle`, its body straight out behind it. */
+export function placeSnake(snake, head, angle, length) {
+    snake.angle = angle;
+    snake.targetAngle = angle;
+    snake.dir = { x: Math.cos(angle), y: Math.sin(angle) };
+    snake.length = length;
+    snake.trail = [
+        { x: head.x, y: head.y },
+        { x: head.x - snake.dir.x * length * SEGMENT_SPACING, y: head.y - snake.dir.y * length * SEGMENT_SPACING },
+    ];
+    layBody(snake);
+    snake.previousBody = null;
+    snake.alive = true;
+}
+
+/**
+ * The shield takes the hit instead of the player. Hitting a wall puts the worm back where it was
+ * and turns it to face the middle of the field; then it can't hit snakes for a moment.
  */
 function breakShield(world, player, cause) {
     delete player.effects.shield;
     player.effects.grace = world.time + SHIELD_GRACE_MS;
 
     if (cause.type === 'wall') {
-        player.body = player.previousBody.map((cell) => ({ ...cell }));
-        player.dir = escapeDirection(world, player);
+        player.trail.shift();
+        layBody(player);
+        const head = player.body[0];
+        const angle = Math.atan2(world.rows / 2 - head.y, world.cols / 2 - head.x);
+        player.angle = angle;
+        player.targetAngle = angle;
+        player.dir = { x: Math.cos(angle), y: Math.sin(angle) };
     }
 
     return { type: 'shieldBroke', snake: player, at: { ...player.body[0] } };
-}
-
-function escapeDirection(world, snake) {
-    const head = snake.body[0];
-    const roomToward = (dir) => {
-        let room = 0;
-        while (isInside(world, head.x + dir.x * (room + 1), head.y + dir.y * (room + 1))) {
-            room++;
-        }
-        return room;
-    };
-
-    return Object.values(DIRECTIONS)
-        .filter((dir) => dir !== snake.dir && !isReverse(dir, snake.dir))
-        .sort((a, b) => roomToward(b) - roomToward(a))[0];
 }
 
 /**
@@ -276,76 +336,61 @@ function isIntangible(world, snake) {
 }
 
 /**
- * Magnet: food near a player's head slides one cell closer each move, and food
- * within two cells is pulled straight in (so it can't trail diagonally beside the head).
+ * Magnet: food near a player's head drifts toward it, and is eaten when it arrives.
  */
-function pullFoodToPlayer(world, player) {
+function pullFoodToPlayer(world, player, seconds) {
     if (!player.alive || !isEffectActive(world, 'magnet', player)) {
         return [];
     }
 
     const head = player.body[0];
-    const grid = occupancyGrid(world);
     const events = [];
-
     for (const food of [...world.foods]) {
         const dx = head.x - food.x;
         const dy = head.y - food.y;
-        const distance = Math.abs(dx) + Math.abs(dy);
-        if (food.kind === 'power' || distance === 0 || distance > MAGNET_RADIUS || !world.foods.includes(food)) {
+        const distance = Math.hypot(dx, dy);
+        if (food.kind === 'power' || distance > MAGNET_RADIUS) {
             continue;
         }
-
-        if (distance <= 2) {
-            food.from = { x: food.x, y: food.y };
+        const pull = Math.min(distance, MAGNET_SPEED * seconds);
+        food.from = { x: food.x, y: food.y };
+        food.x += (dx / (distance || 1)) * pull;
+        food.y += (dy / (distance || 1)) * pull;
+        if (distance - pull < EAT_DISTANCE) {
             world.foods.splice(world.foods.indexOf(food), 1);
             events.push(eat(world, player, food));
-            continue;
-        }
-
-        const x = food.x + (Math.abs(dx) >= Math.abs(dy) ? Math.sign(dx) : 0);
-        const y = food.y + (Math.abs(dx) >= Math.abs(dy) ? 0 : Math.sign(dy));
-        if (!grid[y * world.cols + x] && !foodAt(world, x, y)) {
-            food.from = { x: food.x, y: food.y };
-            food.x = x;
-            food.y = y;
         }
     }
-
     return events;
 }
 
 /**
- * The snake whose head runs into a wall or another snake dies; the snake that was
- * hit keeps going. Two heads meeting kills both. A snake can cross its own body.
+ * The snake whose head runs into a wall or another snake dies; the snake that was hit keeps
+ * going. Two heads meeting kills both. A worm can cross its own body.
  */
 function findCrashes(world, movers) {
-    const cells = new Map();
-    for (const snake of movers) {
-        snake.body.forEach((cell, index) => {
-            if (isInside(world, cell.x, cell.y)) {
-                const key = cell.y * world.cols + cell.x;
-                if (!cells.has(key)) {
-                    cells.set(key, []);
-                }
-                cells.get(key).push({ snake, index });
-            }
-        });
-    }
-
+    const bodies = indexBodies(world);
     const crashes = new Map();
+
     for (const snake of movers) {
         const head = snake.body[0];
         if (!isInside(world, head.x, head.y)) {
             crashes.set(snake, { type: 'wall' });
             continue;
         }
+        if (isIntangible(world, snake)) {
+            continue;
+        }
 
-        const other = cells
-            .get(head.y * world.cols + head.x)
-            .find((occupant) => occupant.snake !== snake && !isIntangible(world, occupant.snake) && !isIntangible(world, snake));
-        if (other) {
-            crashes.set(snake, { type: other.index === 0 ? 'headOn' : 'hit', other: other.snake });
+        let hit = null;
+        bodies.near(head.x, head.y, HIT_DISTANCE, (entry) => {
+            if (entry.snake !== snake && !isIntangible(world, entry.snake) && (!hit || entry.index < hit.index)) {
+                hit = entry;
+            }
+            return false;
+        });
+        if (hit) {
+            crashes.set(snake, { type: hit.index === 0 ? 'headOn' : 'hit', other: hit.snake });
         }
     }
 
@@ -363,12 +408,12 @@ function killSnake(world, snake, cause) {
         }
     }
 
-    snake.body.forEach((cell, index) => {
-        if (index % 2 === 0 && isInside(world, cell.x, cell.y) && !foodAt(world, cell.x, cell.y)) {
+    snake.body.forEach((point, index) => {
+        if (index % 2 === 0 && isInside(world, point.x, point.y)) {
             world.foods.push({
                 kind: 'drop',
-                x: cell.x,
-                y: cell.y,
+                x: round(point.x),
+                y: round(point.y),
                 color: snake.color,
                 ...FOOD,
                 expiresAt: world.time + DROP_LIFETIME_MS,
@@ -376,17 +421,22 @@ function killSnake(world, snake, cause) {
         }
     });
     snake.body = [];
+    snake.trail = [];
     snake.respawnAt = world.time + BOT_RESPAWN_MS;
 }
 
 /**
- * Remove and return the food at a cell. Only players can pick up power-ups.
+ * Remove and return the food within reach of a worm's head. Only players can pick up power-ups.
  */
-function takeFoodAt(world, snake, cell) {
-    const index = world.foods.findIndex(
-        (food) => food.x === cell.x && food.y === cell.y && (snake.isPlayer || food.kind !== 'power'),
+function takeFoodNear(world, snake) {
+    const head = snake.body[0];
+    const eaten = world.foods.filter(
+        (food) => Math.hypot(food.x - head.x, food.y - head.y) < EAT_DISTANCE && (snake.isPlayer || food.kind !== 'power'),
     );
-    return index === -1 ? null : world.foods.splice(index, 1)[0];
+    if (eaten.length) {
+        world.foods = world.foods.filter((food) => !eaten.includes(food));
+    }
+    return eaten;
 }
 
 function eat(world, snake, food) {
@@ -397,11 +447,11 @@ function eat(world, snake, food) {
         return { type: 'powerUp', snake, food, powerUp: food.powerUp, at };
     }
 
-    snake.growth += food.grow;
+    snake.length += food.grow;
     if (snake.isPlayer) {
         snake.points += food.points;
     } else {
-        snake.growth = Math.min(snake.growth, Math.max(0, BOT_MAX_LENGTH - snake.body.length));
+        snake.length = Math.min(snake.length, BOT_MAX_LENGTH);
     }
 
     return { type: food.kind === 'fruit' ? 'fruit' : 'eat', snake, food, at };
@@ -427,12 +477,12 @@ function updateFruit(world) {
         return;
     }
 
-    const cell = randomFreeCell(world);
-    if (cell) {
+    const spot = randomFreeSpot(world, indexBodies(world));
+    if (spot) {
         const fruit = pickWeighted(world.random, FRUITS);
         world.foods.push({
             kind: 'fruit',
-            ...cell,
+            ...spot,
             emoji: fruit.emoji,
             points: fruit.points,
             grow: fruit.grow,
@@ -450,11 +500,11 @@ function updatePowerUps(world) {
     }
 
     world.nextPowerUpAt = world.time + randomBetween(world.random, POWER_UP_SPAWN_MIN_MS, POWER_UP_SPAWN_MAX_MS);
-    const cell = world.foods.some((food) => food.kind === 'power') ? null : randomFreeCell(world);
-    if (cell) {
+    const spot = world.foods.some((food) => food.kind === 'power') ? null : randomFreeSpot(world, indexBodies(world));
+    if (spot) {
         world.foods.push({
             kind: 'power',
-            ...cell,
+            ...spot,
             powerUp: pickWeighted(world.random, POWER_UPS),
             points: 0,
             grow: 0,
@@ -465,45 +515,47 @@ function updatePowerUps(world) {
 
 function refillFood(world) {
     let count = world.foods.filter((food) => food.kind === 'food').length;
+    if (count >= world.foodCount) {
+        return;
+    }
+    const bodies = indexBodies(world);
     while (count < world.foodCount) {
-        const cell = randomFreeCell(world);
-        if (!cell) {
+        const spot = randomFreeSpot(world, bodies);
+        if (!spot) {
             return;
         }
-        world.foods.push({ kind: 'food', ...cell, ...FOOD });
+        world.foods.push({ kind: 'food', ...spot, ...FOOD });
         count++;
     }
 }
 
 /**
- * Place a snake somewhere empty, facing open space and away from every player's head.
+ * Place a snake somewhere empty, roughly facing the middle of the field, away from every
+ * player's head.
  */
 function spawnSnake(world, snake) {
-    const grid = occupancyGrid(world);
+    const bodies = indexBodies(world);
     const heads = world.snakes.filter((other) => other.isPlayer && other.alive && other !== snake).map((other) => other.body[0]);
-    const directions = Object.values(DIRECTIONS);
 
     for (let attempt = 0; attempt < 200; attempt++) {
-        const dir = directions[Math.floor(world.random() * directions.length)];
-        const x = 3 + Math.floor(world.random() * (world.cols - 6));
-        const y = 3 + Math.floor(world.random() * (world.rows - 6));
-
-        if (heads.some((head) => Math.abs(head.x - x) + Math.abs(head.y - y) < BOT_SAFE_DISTANCE)) {
+        const x = 3 + world.random() * (world.cols - 7);
+        const y = 3 + world.random() * (world.rows - 7);
+        if (heads.some((head) => Math.hypot(head.x - x, head.y - y) < BOT_SAFE_DISTANCE)) {
             continue;
         }
 
-        const cells = [];
-        for (let i = -3; i < START_LENGTH; i++) {
-            cells.push({ x: x - dir.x * i, y: y - dir.y * i });
+        const angle = Math.atan2(world.rows / 2 - y, world.cols / 2 - x) + (world.random() - 0.5) * 1.6;
+        const length = START_LENGTH;
+        // The worm's body, and a few cells of room ahead of it, must be clear.
+        let isClear = true;
+        for (let along = -length; along <= 4 && isClear; along += 0.5) {
+            const px = x + Math.cos(angle) * along;
+            const py = y + Math.sin(angle) * along;
+            isClear = isInside(world, px, py, 0.5) && !bodies.near(px, py, 2, (entry) => entry.snake !== snake);
         }
-        const isClear = cells.every((cell) => isInside(world, cell.x, cell.y) && !grid[cell.y * world.cols + cell.x]);
 
         if (isClear) {
-            snake.body = cells.slice(3);
-            snake.previousBody = null;
-            snake.dir = dir;
-            snake.growth = 0;
-            snake.alive = true;
+            placeSnake(snake, { x: round(x), y: round(y) }, angle, length);
             snake.spawnedAt = world.time;
             return true;
         }
@@ -513,41 +565,20 @@ function spawnSnake(world, snake) {
     return false;
 }
 
-/**
- * A flat grid of the board where each cell holds (snake id + 1), or 0 when empty.
- */
-export function occupancyGrid(world) {
-    const grid = new Uint8Array(world.cols * world.rows);
-    for (const snake of world.snakes) {
-        if (!snake.alive) {
-            continue;
-        }
-        for (const cell of snake.body) {
-            if (isInside(world, cell.x, cell.y)) {
-                grid[cell.y * world.cols + cell.x] = snake.id + 1;
-            }
-        }
-    }
-    return grid;
-}
-
-function randomFreeCell(world) {
-    const grid = occupancyGrid(world);
+/** A random spot for food, clear of every worm and of other food. */
+function randomFreeSpot(world, bodies) {
     for (let attempt = 0; attempt < 200; attempt++) {
-        const x = Math.floor(world.random() * world.cols);
-        const y = Math.floor(world.random() * world.rows);
-        if (!grid[y * world.cols + x] && !foodAt(world, x, y)) {
+        const x = round(world.random() * (world.cols - 1));
+        const y = round(world.random() * (world.rows - 1));
+        const nearFood = world.foods.some((food) => Math.hypot(food.x - x, food.y - y) < 1);
+        if (!nearFood && !bodies.near(x, y, 1.5, () => true)) {
             return { x, y };
         }
     }
     return null;
 }
 
-function foodAt(world, x, y) {
-    return world.foods.find((food) => food.x === x && food.y === y);
-}
-
-/** The lowest id no snake is using (ids fit in the occupancy grid's bytes). */
+/** The lowest id no snake is using. */
 function freeId(world) {
     const used = new Set(world.snakes.map((snake) => snake.id));
     let id = 0;
@@ -557,16 +588,20 @@ function freeId(world) {
     return id;
 }
 
-function makeSnake(id, { name, color }, isPlayer) {
+function makeSnake(id, { name, color, skin = null }, isPlayer) {
     return {
         id,
         name,
         color,
+        skin,
         isPlayer,
         body: [],
         previousBody: null,
-        dir: DIRECTIONS.right,
-        growth: 0,
+        trail: [],
+        length: START_LENGTH,
+        angle: 0,
+        targetAngle: 0,
+        dir: { x: 1, y: 0 },
         alive: false,
         respawnAt: 0,
         spawnedAt: 0,
@@ -576,8 +611,9 @@ function makeSnake(id, { name, color }, isPlayer) {
     };
 }
 
-export function isReverse(a, b) {
-    return a.x === -b.x && a.y === -b.y;
+/** Positions are kept to two decimals, which is plenty and keeps what goes online small. */
+function round(value) {
+    return Math.round(value * 100) / 100;
 }
 
 function randomBetween(random, min, max) {
