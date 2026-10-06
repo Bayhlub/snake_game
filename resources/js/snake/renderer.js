@@ -681,8 +681,9 @@ function drawNameTag(ctx, world, snake, head, text, now, isMe, putBelow = false)
 
 function drawFood(ctx, food, world, now, age, progress) {
     const from = food.from ?? food;
-    const cx = (from.x + (food.x - from.x) * progress) * CELL + CELL / 2;
-    const cy = (from.y + (food.y - from.y) * progress) * CELL + CELL / 2;
+    const moved = Math.min(progress, 1);
+    const cx = (from.x + (food.x - from.x) * moved) * CELL + CELL / 2;
+    const cy = (from.y + (food.y - from.y) * moved) * CELL + CELL / 2;
     const pop = Math.min(1, age / 250);
     const grow = pop < 1 ? Math.max(easeOutBack(pop), 0.01) : 1;
 

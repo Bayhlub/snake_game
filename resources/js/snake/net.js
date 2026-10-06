@@ -11,6 +11,8 @@ import { wrapAngle } from './space.js';
  * Snakes and foods are packed small (bodies as flat [x, y, x, y, …] lists, to two decimals)
  * because the whole board goes to every player several times a second.
  */
+/** How far past the latest update (in update intervals) worms keep gliding while the next one is late. */
+const MAX_AHEAD = 1.6;
 const POWER_UPS_BY_TYPE = Object.fromEntries(POWER_UPS.map((powerUp) => [powerUp.type, powerUp]));
 const round = (value) => Math.round(value * 100) / 100;
 const roundPoint = (point) => ({ x: round(point.x), y: round(point.y) });
@@ -62,8 +64,9 @@ export function packEvent(event) {
  * glide from where they were on screen to where the server says they are now, as smoothly as solo.
  *
  * Updates don't arrive evenly over the internet: some come late, some bunch up. So each glide takes
- * about as long as updates have recently been apart (`progress(now)` says how far along it is), and
- * a new update starts from wherever the worms are drawn at that moment instead of jumping.
+ * about as long as updates have recently been apart (`progress(now)` says how far along it is); when
+ * the next one is late, worms keep going the way they were (progress past 1, up to MAX_AHEAD) rather
+ * than stopping; and a new update starts from wherever the worms are drawn at that moment.
  */
 export function createRemoteWorld() {
     const world = { multiplayer: true, cols: 0, rows: 0, time: 0, snakes: [], foods: [], meId: null, tickMs: 50 };
@@ -74,7 +77,7 @@ export function createRemoteWorld() {
     const spotOf = (food) => `${food.kind}|${food.x}|${food.y}`;
 
     /** How far (0–1) the glide toward the latest update has got by `now`. */
-    world.progress = (now) => (receivedAt === null ? 1 : Math.min(1, (now - receivedAt) / (interval * 1.1)));
+    world.progress = (now) => (receivedAt === null ? 1 : Math.min(MAX_AHEAD, (now - receivedAt) / interval));
 
     world.update = (state, now = performance.now()) => {
         const shown = world.progress(now);

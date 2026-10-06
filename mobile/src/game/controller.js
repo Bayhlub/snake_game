@@ -64,7 +64,8 @@ export function createGame({ sound, translate, shape: initialShape, skin: initia
             length: player?.body.length ?? 0,
             best: Math.max(best, points),
             bots: `${others.filter((snake) => snake.alive).length}/${online ? others.length : BOTS.length}`,
-            powerUps: status === 'over' || !player ? [] : activePowerUps(shown, player),
+            // Time left to a quarter second is plenty for the chips' bars, and changes less often.
+            powerUps: status === 'over' || !player ? [] : activePowerUps(shown, player).map((p) => ({ ...p, remainingMs: Math.ceil(p.remainingMs / 250) * 250 })),
             following: isFollowing(),
             skin,
             players: online
@@ -77,7 +78,20 @@ export function createGame({ sound, translate, shape: initialShape, skin: initia
         };
     }
 
-    const emit = () => onChange(snapshot());
+    /**
+     * Report the HUD and game state, but only when something shown changed: online, updates come 20
+     * times a second, and redrawing the whole screen that often slows the game down on a phone.
+     */
+    let lastShown = null;
+    const emit = () => {
+        const next = snapshot();
+        const { result: finished, ...rest } = next;
+        const shown = JSON.stringify([rest, finished && [finished.points, finished.length, finished.isNewBest, finished.cause?.type, finished.cause?.other?.name]]);
+        if (shown !== lastShown) {
+            lastShown = shown;
+            onChange(next);
+        }
+    };
 
     /** The camera follows your worm (and zoom works) while a game is going. */
     function isFollowing() {

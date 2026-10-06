@@ -113,6 +113,8 @@ test('online worms glide on from where they are drawn, even when updates arrive 
     world.update(state(11), 50);
     assert.equal(world.progress(50), 0);
     assert.ok(world.progress(75) > 0.3 && world.progress(75) < 0.7, 'halfway through the glide');
+    assert.ok(world.progress(85) > 0.6, 'and further on');
+    assert.ok(world.progress(110) > 1 && world.progress(1000) <= 1.6, 'a late update: the worms keep gliding on, but not forever');
 
     // The next update comes early, a quarter of the way into the glide: the worm carries on from
     // where it is drawn instead of jumping.

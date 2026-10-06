@@ -412,10 +412,16 @@ export function startSnakeGame(root) {
         showOverlay('ready');
     }
 
-    /** Everyone in the online game, best score first. */
+    /** Everyone in the online game, best score first; rebuilt only when it changed. */
+    let shownPlayers = '';
     function renderOnlinePlayers() {
         const player = me();
         const players = online.world.snakes.filter((snake) => snake.isPlayer).sort((a, b) => b.points - a.points);
+        const list = JSON.stringify([language, players.map((snake) => [snake.id, snake.name, snake.color, snake.points, snake.alive, snake === player])]);
+        if (list === shownPlayers) {
+            return;
+        }
+        shownPlayers = list;
         elements.onlinePlayers.replaceChildren(
             ...players.map((snake) => {
                 const row = elements.onlinePlayerRow.content.cloneNode(true);
