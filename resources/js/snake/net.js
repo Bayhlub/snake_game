@@ -70,6 +70,8 @@ export function createRemoteWorld() {
     const byId = new Map();
     let receivedAt = null;
     let interval = null;
+    let foodsBySpot = new Map();
+    const spotOf = (food) => `${food.kind}|${food.x}|${food.y}`;
 
     /** How far (0–1) the glide toward the latest update has got by `now`. */
     world.progress = (now) => (receivedAt === null ? 1 : Math.min(1, (now - receivedAt) / (interval * 1.1)));
@@ -128,7 +130,16 @@ export function createRemoteWorld() {
             }
         }
 
-        world.foods = state.foods.map((food) => ({ ...food, ...(food.powerUp ? { powerUp: POWER_UPS_BY_TYPE[food.powerUp] } : {}) }));
+        // Keep each piece of food the same object from one update to the next (found by where it is,
+        // or where a magnet pulled it from), so it isn't drawn popping in again on every update.
+        world.foods = state.foods.map((packed) => {
+            const food = foodsBySpot.get(spotOf(packed)) ?? (packed.from ? foodsBySpot.get(spotOf({ kind: packed.kind, ...packed.from })) : null) ?? {};
+            for (const key of Object.keys(food)) {
+                delete food[key];
+            }
+            return Object.assign(food, packed, packed.powerUp ? { powerUp: POWER_UPS_BY_TYPE[packed.powerUp] } : {});
+        });
+        foodsBySpot = new Map(world.foods.map((food) => [spotOf(food), food]));
     };
 
     /** Turn a packed event back into one that points at this world's snakes. */

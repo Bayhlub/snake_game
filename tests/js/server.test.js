@@ -121,3 +121,20 @@ test('online worms glide on from where they are drawn, even when updates arrive 
     assert.ok(snake.previousBody[0].x > 10 && snake.previousBody[0].x < 11, 'it starts from partway along');
     assert.equal(snake.body[0].x, 12);
 });
+
+test('online food stays the same piece from one update to the next, so it is not redrawn popping in', () => {
+    const world = createRemoteWorld();
+    const state = (foods) => ({ time: 0, tickMs: 50, cols: 40, rows: 56, snakes: [], foods });
+    const donut = { kind: 'fruit', x: 5, y: 6, emoji: '🍩', points: 5, expiresAt: 9000 };
+
+    world.update(state([donut, { kind: 'food', x: 9, y: 9, points: 1 }]), 0);
+    const [first] = world.foods;
+    world.update(state([donut, { kind: 'food', x: 8.5, y: 9, from: { x: 9, y: 9 }, points: 1 }]), 50);
+
+    assert.equal(world.foods[0], first, 'the donut is the same piece');
+    assert.equal(world.foods[0].emoji, '🍩');
+    assert.equal(world.foods[1].x, 8.5, 'food pulled by a magnet moves');
+    world.update(state([donut]), 100);
+    assert.equal(world.foods.length, 1, 'eaten food goes away');
+    assert.equal(world.foods[0], first);
+});
