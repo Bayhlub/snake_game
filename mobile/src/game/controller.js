@@ -46,6 +46,8 @@ export function createGame({ sound, translate, shape: initialShape, skin: initia
     let result = null;
     /** While playing online: { connection, world, lastLength, sentAngle }. */
     let online = null;
+    /** While connecting to the online game, before we've joined. */
+    let joining = null;
 
     const shownWorld = () => online?.world ?? world;
     const me = () => (online ? online.world.me() : getPlayer(world));
@@ -215,9 +217,11 @@ export function createGame({ sound, translate, shape: initialShape, skin: initia
      * null when joined, or 'offline' / 'full' when it couldn't.
      */
     function joinOnline(url, name, onDone) {
+        joining?.leave();
         const connection = connectOnline(url, name, {
             skin,
             onJoined(remote) {
+                joining = null;
                 online = { connection, world: remote, lastLength: remote.me().body.length, sentAngle: null };
                 status = 'playing';
                 result = null;
@@ -242,15 +246,21 @@ export function createGame({ sound, translate, shape: initialShape, skin: initia
                 }
                 emit();
             },
-            onFailed: (reason) => onDone(reason),
+            onFailed: (reason) => {
+                joining = null;
+                onDone(reason);
+            },
             onClosed() {
                 leaveOnline();
                 onMessage(t('disconnected'));
             },
         });
+        joining = connection;
     }
 
     function leaveOnline() {
+        joining?.leave();
+        joining = null;
         online?.connection.leave();
         online = null;
         world = newWorld();
@@ -262,6 +272,18 @@ export function createGame({ sound, translate, shape: initialShape, skin: initia
 
     return {
         start: newGame,
+
+        /** Back to the start screen, dropping a solo game in progress (to switch to online). */
+        stop() {
+            if (online) {
+                return;
+            }
+            world = newWorld();
+            status = 'ready';
+            result = null;
+            stopSteering();
+            emit();
+        },
         joinOnline,
         leaveOnline,
 

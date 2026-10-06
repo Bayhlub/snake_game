@@ -37,7 +37,10 @@
                         <button type="button" data-language="en" lang="en" aria-pressed="true" class="lang-option">EN</button>
                         <button type="button" data-language="lo" lang="lo" aria-pressed="false" class="lang-option">ລາວ</button>
                     </div>
-                    <button id="leave-online" type="button" hidden data-i18n="leave" class="rounded-full bg-rose-400/15 px-4 py-2 text-sm font-bold text-rose-200 ring-1 ring-rose-300/30 transition hover:bg-rose-400/25">Leave</button>
+                    <div id="mode-switch" role="group" aria-label="Game mode" data-i18n-aria-label="mode" class="flex rounded-full bg-white/5 p-1 ring-1 ring-white/10">
+                        <button type="button" data-mode="offline" aria-pressed="true" data-i18n="offline" class="lang-option">Offline</button>
+                        <button type="button" data-mode="online" aria-pressed="false" data-i18n="online" class="lang-option">Online</button>
+                    </div>
                     <button id="install-button" type="button" hidden data-i18n="installApp" class="rounded-full bg-emerald-400 px-4 py-2 text-sm font-bold text-emerald-950 transition hover:bg-emerald-300">📲 Install app</button>
                     <button id="sound-toggle" type="button" class="rounded-full bg-white/5 px-4 py-2 text-sm font-medium ring-1 ring-white/10 transition hover:bg-white/10"></button>
                 </div>

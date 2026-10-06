@@ -12,7 +12,7 @@ import { Board } from './src/components/Board';
 import { Hud, PowerUpChips } from './src/components/Controls';
 import { Leaderboard, OnlinePlayers } from './src/components/Leaderboard';
 import { GameOverOverlay, JoinOverlay, PauseOverlay, StartOverlay } from './src/components/Overlays';
-import { Button, LanguageSwitch } from './src/components/Ui';
+import { Button, PillSwitch } from './src/components/Ui';
 import { createGame } from './src/game/controller';
 import { COLS, DEFAULT_SKIN, DEFAULT_ZOOM, LANGUAGES, MULTIPLAYER_PORT, ROWS, pickLanguage, translator } from './src/game/shared';
 import { createSound } from './src/game/sound';
@@ -223,6 +223,26 @@ function GameScreen({ saved }) {
         setSaveStatus(null);
     };
 
+    /**
+     * The Offline | Online switch. Online: join right away with the saved name (asking for one the
+     * first time), dropping a solo game in progress. Offline: leave, or stop connecting.
+     */
+    const changeMode = (mode) => {
+        if (mode === 'online' && !state.online && !joinOpen) {
+            game.stop();
+            setJoinStatus(null);
+            setJoinOpen(true);
+            if (name.trim()) {
+                joinOnline();
+            }
+        } else if (mode === 'offline' && (state.online || joinOpen)) {
+            setJoinOpen(false);
+            setJoining(false);
+            setJoinStatus(null);
+            leaveOnline();
+        }
+    };
+
     const toggleSound = () => {
         const nowMuted = soundRef.current.toggle();
         setMuted(nowMuted);
@@ -296,7 +316,7 @@ function GameScreen({ saved }) {
                         onJoin={joinOnline}
                         joining={joining}
                         status={joinStatus ? t(joinStatus) : ''}
-                        onBack={() => setJoinOpen(false)}
+                        onBack={() => changeMode('offline')}
                     />
                 )}
                 {state.status === 'paused' && <PauseOverlay t={t} onResume={game.resume} />}
@@ -331,8 +351,16 @@ function GameScreen({ saved }) {
                 <Text style={styles.title}>{t('title')}</Text>
             </View>
             <View style={styles.headerButtons}>
-                <LanguageSwitch languages={LANGUAGES} value={language} onChange={changeLanguage} label={t('language')} />
-                {state.online && <Button label={t('leave')} variant="ghost" size="small" onPress={leaveOnline} />}
+                <PillSwitch options={LANGUAGES} value={language} onChange={changeLanguage} label={t('language')} />
+                <PillSwitch
+                    options={[
+                        { code: 'offline', label: t('offline') },
+                        { code: 'online', label: t('online') },
+                    ]}
+                    value={state.online || joinOpen ? 'online' : 'offline'}
+                    onChange={changeMode}
+                    label={t('mode')}
+                />
                 {state.status === 'playing' && !state.online && <Button label={t('pause')} variant="ghost" size="small" onPress={game.pause} />}
                 <Button label={muted ? t('soundOff') : t('soundOn')} variant="ghost" size="small" onPress={toggleSound} />
             </View>

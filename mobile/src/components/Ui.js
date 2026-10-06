@@ -33,24 +33,24 @@ export function Button({ label, onPress, variant = 'primary', size = 'medium', d
 }
 
 /**
- * A two-way pill (EN | ລາວ) for picking the language; the chosen side is filled.
+ * A two-way pill for picking one of a pair, like EN | ລາວ or Offline | Online; the chosen side is filled.
  */
-export function LanguageSwitch({ languages, value, onChange, label }) {
+export function PillSwitch({ options, value, onChange, label }) {
     return (
         <View style={styles.switch} accessibilityRole="radiogroup" accessibilityLabel={label}>
-            {languages.map((language) => {
-                const selected = language.code === value;
+            {options.map((option) => {
+                const selected = option.code === value;
                 return (
                     <Pressable
-                        key={language.code}
-                        onPress={() => onChange(language.code)}
+                        key={option.code}
+                        onPress={() => onChange(option.code)}
                         accessibilityRole="radio"
                         accessibilityState={{ selected }}
-                        accessibilityLabel={language.name}
+                        accessibilityLabel={option.name ?? option.label}
                         hitSlop={4}
                         style={[styles.switchOption, selected && styles.switchSelected]}
                     >
-                        <Text style={[styles.switchText, selected && styles.switchTextSelected]}>{language.label}</Text>
+                        <Text style={[styles.switchText, selected && styles.switchTextSelected]}>{option.label}</Text>
                     </Pressable>
                 );
             })}

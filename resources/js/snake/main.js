@@ -77,7 +77,7 @@ export function startSnakeGame(root) {
         joinName: $('#join-name'),
         joinButton: $('#join-button'),
         joinStatus: $('#join-status'),
-        leaveOnline: $('#leave-online'),
+        modeButtons: root.querySelectorAll('[data-mode]'),
         onlinePanel: $('#online-panel'),
         onlinePlayers: $('#online-players'),
         onlinePlayerRow: $('#online-player-row'),
@@ -121,6 +121,8 @@ export function startSnakeGame(root) {
     let result = null;
     /** While playing online: { connection, world, lastLength, sentAngle }. */
     let online = null;
+    /** While connecting to the online game, before we've joined. */
+    let joining = null;
 
     /** The world on screen, and the snake this device controls. */
     const shownWorld = () => online?.world ?? world;
@@ -336,6 +338,7 @@ export function startSnakeGame(root) {
         storage.set('snake.name', name);
         elements.playerName.value = name;
         elements.joinButton.disabled = true;
+        joining?.leave();
         elements.joinStatus.textContent = t('connecting');
         // A free hosted server sleeps when nobody plays; say so if waking it takes a while.
         const slowNotice = setTimeout(() => {
@@ -348,12 +351,12 @@ export function startSnakeGame(root) {
             skin,
             onJoined(remote) {
                 clearTimeout(slowNotice);
+                joining = null;
                 online = { connection, world: remote, lastLength: remote.me().body.length, sentAngle: null };
                 state = 'playing';
                 stopSteering();
                 elements.joinButton.disabled = false;
                 elements.joinStatus.textContent = '';
-                elements.leaveOnline.hidden = false;
                 elements.onlinePanel.hidden = false;
                 showOverlay(null);
                 document.activeElement?.blur();
@@ -378,6 +381,7 @@ export function startSnakeGame(root) {
             },
             onFailed(reason) {
                 clearTimeout(slowNotice);
+                joining = null;
                 elements.joinButton.disabled = false;
                 elements.joinStatus.textContent = t(reason === 'full' ? 'serverFull' : 'serverOffline');
             },
@@ -386,6 +390,44 @@ export function startSnakeGame(root) {
                 showMessage(t('disconnected'));
             },
         });
+        joining = connection;
+    }
+
+    /**
+     * The Offline | Online switch, Online side: join right away with the saved name (asking for one
+     * the first time), dropping a solo game in progress.
+     */
+    function goOnline() {
+        if (online || isJoinOpen()) {
+            return;
+        }
+        world = createWorld(Math.random, { skin });
+        state = 'ready';
+        result = null;
+        updateHud();
+        elements.joinStatus.textContent = '';
+        showOverlay('join');
+        if (elements.joinName.value.trim()) {
+            elements.joinForm.requestSubmit();
+        } else {
+            elements.joinName.focus();
+        }
+    }
+
+    /** The Offline side: leave the online game, or stop connecting to it. */
+    function goOffline() {
+        if (online || isJoinOpen()) {
+            leaveOnline();
+        }
+    }
+
+    function isJoinOpen() {
+        return !elements.overlays.join.hidden;
+    }
+
+    function updateModeSwitch() {
+        const mode = online || isJoinOpen() ? 'online' : 'offline';
+        elements.modeButtons.forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.mode === mode)));
     }
 
     /**
@@ -401,12 +443,14 @@ export function startSnakeGame(root) {
     }
 
     function leaveOnline() {
+        joining?.leave();
+        joining = null;
+        elements.joinButton.disabled = false;
         online?.connection.leave();
         online = null;
         world = createWorld(Math.random, { skin });
         state = 'ready';
         result = null;
-        elements.leaveOnline.hidden = true;
         elements.onlinePanel.hidden = true;
         updateHud();
         showOverlay('ready');
@@ -612,6 +656,7 @@ export function startSnakeGame(root) {
         for (const [key, overlay] of Object.entries(elements.overlays)) {
             overlay.hidden = key !== name;
         }
+        updateModeSwitch();
     }
 
     function showMessage(text) {
@@ -798,16 +843,18 @@ export function startSnakeGame(root) {
     });
 
     $('#start-button').addEventListener('click', newGame);
-    $('#online-button').addEventListener('click', () => {
-        elements.joinStatus.textContent = '';
-        showOverlay('join');
-        elements.joinName.focus();
-    });
-    $('#join-back').addEventListener('click', () => showOverlay('ready'));
+    $('#online-button').addEventListener('click', goOnline);
+    $('#join-back').addEventListener('click', goOffline);
     elements.joinForm.addEventListener('submit', joinOnline);
-    elements.leaveOnline.addEventListener('click', () => {
-        leaveOnline();
-        elements.leaveOnline.blur();
+    elements.modeButtons.forEach((button) => {
+        button.addEventListener('click', () => {
+            if (button.dataset.mode === 'online') {
+                goOnline();
+            } else {
+                goOffline();
+            }
+            button.blur();
+        });
     });
     $('#resume-button').addEventListener('click', () => setPaused(false));
     $('#play-again-button').addEventListener('click', newGame);
