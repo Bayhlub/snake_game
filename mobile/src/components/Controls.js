@@ -1,60 +1,6 @@
-import { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
 import { colors, fonts } from '../theme';
-
-const PAD = [
-    { direction: 'up', label: '▲', row: 0, col: 1 },
-    { direction: 'left', label: '◀', row: 1, col: 0 },
-    { direction: 'down', label: '▼', row: 1, col: 1 },
-    { direction: 'right', label: '▶', row: 1, col: 2 },
-];
-
-/**
- * Arrow buttons for players who prefer tapping to dragging.
- */
-export function DirectionPad({ t, onTurn, size = 56 }) {
-    const gap = 8;
-    return (
-        <View style={{ width: size * 3 + gap * 2, height: size * 2 + gap, alignSelf: 'center' }}>
-            {PAD.map(({ direction, label, row, col }) => (
-                <PadKey
-                    key={direction}
-                    label={label}
-                    name={t(direction)}
-                    onDown={() => onTurn(direction)}
-                    style={{ width: size, height: size, left: col * (size + gap), top: row * (size + gap) }}
-                />
-            ))}
-        </View>
-    );
-}
-
-/**
- * Turns the moment a finger lands. Pressable waits briefly before "press in" (and skips it on a
- * quick web tap), which makes steering feel laggy, so the key claims the touch itself.
- */
-function PadKey({ label, name, onDown, style }) {
-    const [pressed, setPressed] = useState(false);
-    return (
-        <View
-            accessible
-            accessibilityRole="button"
-            accessibilityLabel={name}
-            onAccessibilityTap={onDown}
-            onStartShouldSetResponder={() => true}
-            onResponderGrant={() => {
-                setPressed(true);
-                onDown();
-            }}
-            onResponderRelease={() => setPressed(false)}
-            onResponderTerminate={() => setPressed(false)}
-            style={[styles.key, style, pressed && styles.pressed]}
-        >
-            <Text style={[styles.label, pressed && styles.labelPressed]}>{label}</Text>
-        </View>
-    );
-}
 
 export function Hud({ t, points, length, best, bots }) {
     const stats = [
@@ -122,18 +68,6 @@ const styles = StyleSheet.create({
     chipLabel: { fontFamily: fonts.semibold, fontSize: 11, color: colors.text },
     chipTrack: { width: 26, height: 5, borderRadius: 999, overflow: 'hidden', backgroundColor: 'rgba(255, 255, 255, 0.15)' },
     chipBar: { height: '100%', borderRadius: 999 },
-    key: {
-        position: 'absolute',
-        borderRadius: 14,
-        backgroundColor: 'rgba(255, 255, 255, 0.1)',
-        borderWidth: 1,
-        borderColor: 'rgba(255, 255, 255, 0.15)',
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    pressed: { backgroundColor: colors.emerald },
-    label: { fontSize: 20, color: colors.text },
-    labelPressed: { color: colors.emeraldDark },
     hud: { flexDirection: 'row', gap: 8 },
     stat: {
         flex: 1,

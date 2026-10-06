@@ -5,7 +5,7 @@ import { after, before, test } from 'node:test';
 import { WebSocket } from 'ws';
 
 import { START_LENGTH } from '../../resources/js/snake/config.js';
-import { createRemoteWorld } from '../../resources/js/snake/net.js';
+import { createRemoteWorld, packEvent } from '../../resources/js/snake/net.js';
 
 const PORT = 18787;
 let server;
@@ -91,4 +91,14 @@ test('players wear the skin they picked, and an app that picks none gets one nob
     for (const client of [lin, old, sneaky]) {
         client.socket.close();
     }
+});
+
+test('a power-up someone picks up arrives with its look, so devices can draw it being eaten', () => {
+    const shield = { type: 'shield', emoji: '🛡️', color: '#38bdf8', durationMs: 12000 };
+    const packed = packEvent({ type: 'powerUp', snake: { id: 3 }, food: { kind: 'power', x: 4, y: 5, points: 0, powerUp: shield }, powerUp: shield, at: { x: 4, y: 5 } });
+    const event = createRemoteWorld().unpackEvent(JSON.parse(JSON.stringify(packed)));
+
+    assert.equal(event.food.kind, 'power');
+    assert.equal(event.food.powerUp.type, 'shield');
+    assert.equal(event.food.powerUp.color, '#38bdf8');
 });

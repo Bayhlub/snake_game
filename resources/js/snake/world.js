@@ -6,7 +6,9 @@ import {
     BOTS,
     CELLS_PER_FOOD,
     COLS,
+    DROP,
     DROP_LIFETIME_MS,
+    DROP_TREATS,
     EAT_DISTANCE,
     FOOD,
     FRUIT_LIFETIME_MS,
@@ -17,8 +19,6 @@ import {
     MAGNET_RADIUS,
     MAGNET_SPEED,
     MAX_FRUITS,
-    MAX_SPEED,
-    MULTIPLAYER_SPEED,
     MULTIPLAYER_TICK_MS,
     PLAYER,
     POWER_UP_LIFETIME_MS,
@@ -30,11 +30,11 @@ import {
     SHIELD_GRACE_MS,
     SLOW_MO_FACTOR,
     SPAWN_GRACE_MS,
-    SPEED_PER_SEGMENT,
+    SPEED,
+    TREAT_REACH,
     START_LENGTH,
-    START_SPEED,
     TICK_MS,
-    TURN_RATE,
+    TURN_RADIUS,
 } from './config.js';
 import { skinById } from './skins.js';
 import { indexBodies, isInside, wrapAngle } from './space.js';
@@ -141,17 +141,12 @@ export function tickDuration(world) {
 }
 
 /**
- * How fast every worm moves, in cells per second. Solo the game speeds up as the player grows;
- * online it keeps an even pace. Slow-mo slows everyone down (online, while anyone has it).
+ * How fast every worm moves, in cells per second: the same for everyone, however long they grow.
+ * Slow-mo slows everyone down (online, while anyone has it).
  */
 export function worldSpeed(world) {
-    let speed = MULTIPLAYER_SPEED;
-    if (!world.multiplayer) {
-        const growth = getPlayer(world).body.length - START_LENGTH;
-        speed = Math.min(MAX_SPEED, START_SPEED + Math.max(0, growth) * SPEED_PER_SEGMENT);
-    }
     const slowed = world.snakes.some((snake) => snake.isPlayer && isEffectActive(world, 'slow', snake));
-    return slowed ? speed / SLOW_MO_FACTOR : speed;
+    return slowed ? SPEED / SLOW_MO_FACTOR : SPEED;
 }
 
 export function isEffectActive(world, type, snake = getPlayer(world)) {
@@ -211,7 +206,7 @@ export function step(world, turns, elapsedMs) {
 
     const distance = worldSpeed(world) * seconds;
     for (const snake of movers) {
-        moveSnake(snake, distance, TURN_RATE * seconds);
+        moveSnake(snake, distance);
     }
 
     const crashes = findCrashes(world, movers);
@@ -245,12 +240,21 @@ export function step(world, turns, elapsedMs) {
 }
 
 /**
- * Turn toward where the worm is steered (no faster than `maxTurn`), glide `distance` cells forward,
- * and lay the body out along the trail behind the head.
+ * Turn toward where the worm is steered, along a circle no tighter than TURN_RADIUS, glide
+ * `distance` cells forward, and lay the body out along the trail behind the head.
  */
-function moveSnake(snake, distance, maxTurn) {
-    const turn = wrapAngle(snake.targetAngle - snake.angle);
-    snake.angle = wrapAngle(snake.angle + Math.max(-maxTurn, Math.min(maxTurn, turn)));
+function moveSnake(snake, distance) {
+    let turn = wrapAngle(snake.targetAngle - snake.angle);
+    // Steered almost straight back, the shorter way round could flip between left and right as the
+    // finger wobbles; keep turning the way it already is, so a U-turn is one smooth loop.
+    if (Math.abs(turn) > 2.6 && snake.turning) {
+        turn = snake.turning * Math.abs(turn);
+    }
+    const maxTurn = distance / TURN_RADIUS;
+    const turned = Math.max(-maxTurn, Math.min(maxTurn, turn));
+    snake.turning = Math.abs(turned) > 1e-6 ? Math.sign(turned) : 0;
+    snake.previousAngle = snake.angle;
+    snake.angle = wrapAngle(snake.angle + turned);
     snake.dir = { x: Math.cos(snake.angle), y: Math.sin(snake.angle) };
 
     const head = snake.trail[0];
@@ -295,6 +299,7 @@ function layBody(snake) {
 /** Put a worm down with its head at `head`, facing `angle`, its body straight out behind it. */
 export function placeSnake(snake, head, angle, length) {
     snake.angle = angle;
+    snake.previousAngle = angle;
     snake.targetAngle = angle;
     snake.dir = { x: Math.cos(angle), y: Math.sin(angle) };
     snake.length = length;
@@ -408,6 +413,7 @@ function killSnake(world, snake, cause) {
         }
     }
 
+    // The worm turns into a trail of treats along its body, for anyone to eat.
     snake.body.forEach((point, index) => {
         if (index % 2 === 0 && isInside(world, point.x, point.y)) {
             world.foods.push({
@@ -415,7 +421,8 @@ function killSnake(world, snake, cause) {
                 x: round(point.x),
                 y: round(point.y),
                 color: snake.color,
-                ...FOOD,
+                emoji: DROP_TREATS[Math.floor(world.random() * DROP_TREATS.length)],
+                ...DROP,
                 expiresAt: world.time + DROP_LIFETIME_MS,
             });
         }
@@ -430,8 +437,9 @@ function killSnake(world, snake, cause) {
  */
 function takeFoodNear(world, snake) {
     const head = snake.body[0];
+    const reach = (food) => (food.kind === 'fruit' ? TREAT_REACH : EAT_DISTANCE);
     const eaten = world.foods.filter(
-        (food) => Math.hypot(food.x - head.x, food.y - head.y) < EAT_DISTANCE && (snake.isPlayer || food.kind !== 'power'),
+        (food) => Math.hypot(food.x - head.x, food.y - head.y) < reach(food) && (snake.isPlayer || food.kind !== 'power'),
     );
     if (eaten.length) {
         world.foods = world.foods.filter((food) => !eaten.includes(food));
@@ -600,7 +608,10 @@ function makeSnake(id, { name, color, skin = null }, isPlayer) {
         trail: [],
         length: START_LENGTH,
         angle: 0,
+        previousAngle: 0,
         targetAngle: 0,
+        /** Which way it turned last step: -1, 1, or 0 going straight. */
+        turning: 0,
         dir: { x: 1, y: 0 },
         alive: false,
         respawnAt: 0,

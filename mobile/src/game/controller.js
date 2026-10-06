@@ -1,7 +1,6 @@
 import { createRenderer } from './renderer';
 import {
     BOTS,
-    DIRECTION_ANGLES,
     activePowerUps,
     clampZoom,
     connectOnline,
@@ -36,8 +35,6 @@ export function createGame({ sound, translate, shape: initialShape, skin: initia
     const newWorld = () => createWorld(Math.random, { ...shape, skin });
     let world = newWorld();
     let status = 'ready';
-    /** An arrow button pressed since the last step: the worm turns to head that way. */
-    let keyTurn = null;
     /**
      * The touch joystick, like Worms Zone: where the finger went down (`base`) and where it is now
      * (`knob`), as fractions of the board's size. Null when no finger is down.
@@ -98,7 +95,6 @@ export function createGame({ sound, translate, shape: initialShape, skin: initia
             return;
         }
         world = newWorld();
-        keyTurn = null;
         accumulated = 0;
         status = 'playing';
         emit();
@@ -118,29 +114,11 @@ export function createGame({ sound, translate, shape: initialShape, skin: initia
         }
     }
 
-    function queueTurn(name) {
-        stopSteering();
-        if (online) {
-            if (status === 'playing') {
-                sendSteer(DIRECTION_ANGLES[name], true);
-            }
-            return;
-        }
-        if (status === 'ready') {
-            newGame();
-        }
-        if (status !== 'playing') {
-            return;
-        }
-
-        keyTurn = DIRECTION_ANGLES[name];
-    }
-
     /**
-     * Online: tell the server where the worm should head, when that has changed (or `always`).
+     * Online: tell the server where the worm should head, when that has changed.
      */
-    function sendSteer(angle, always = false) {
-        if (always || online.sentAngle === null || Math.abs(wrapAngle(angle - online.sentAngle)) > 0.02) {
+    function sendSteer(angle) {
+        if (online.sentAngle === null || Math.abs(wrapAngle(angle - online.sentAngle)) > 0.02) {
             online.connection.send({ type: 'steer', angle: Math.round(angle * 1000) / 1000 });
             online.sentAngle = angle;
         }
@@ -155,7 +133,8 @@ export function createGame({ sound, translate, shape: initialShape, skin: initia
         if (status !== 'playing' || !snake?.alive || !stick) {
             return null;
         }
-        return stickVector(stick, shownWorld().cols, shownWorld().rows);
+        // The joystick is measured on the board on screen, which keeps the phone's shape.
+        return stickVector(stick, shape.cols, shape.rows);
     }
 
     /** The heading (radians) to steer toward for the joystick, or null to keep going. */
@@ -302,7 +281,6 @@ export function createGame({ sound, translate, shape: initialShape, skin: initia
         },
         pause: () => setPaused(true),
         resume: () => setPaused(false),
-        queueTurn,
 
         /**
          * Steer with the touch joystick while a finger is down: `{ base, knob }`, each a spot on the
@@ -331,8 +309,7 @@ export function createGame({ sound, translate, shape: initialShape, skin: initia
 
                 while (accumulated >= duration && status === 'playing') {
                     accumulated -= duration;
-                    const turn = keyTurn ?? steerTurn(getPlayer(world));
-                    keyTurn = null;
+                    const turn = steerTurn(getPlayer(world));
                     handleEvents(step(world, turn, duration), duration - accumulated);
                     if (world.over) {
                         gameOver({ points: world.points, length: getPlayer(world).body.length, cause: world.deathCause });

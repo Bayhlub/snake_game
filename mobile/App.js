@@ -9,7 +9,7 @@ import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-cont
 import { fetchLeaderboard, hasServer, saveScore } from './src/api';
 import { loadLocalScores, saveLocalScore } from './src/localScores';
 import { Board } from './src/components/Board';
-import { DirectionPad, Hud, PowerUpChips } from './src/components/Controls';
+import { Hud, PowerUpChips } from './src/components/Controls';
 import { Leaderboard, OnlinePlayers } from './src/components/Leaderboard';
 import { GameOverOverlay, JoinOverlay, PauseOverlay, StartOverlay } from './src/components/Overlays';
 import { Button, LanguageSwitch } from './src/components/Ui';
@@ -250,25 +250,24 @@ function GameScreen({ saved }) {
         setBoardState(hasServer ? 'ready' : 'local');
     };
 
-    // Make the board as big as the screen allows: upright, it gets all the height left between the
-    // header and stats above and the arrow pad below; sideways, the full height beside the controls.
+    // Make the board as big as the screen allows: upright, it gets all the height left below the
+    // header and stats; sideways, the full height beside the controls.
     const gutter = 16;
     const gap = 12;
-    const padSize = isLandscape ? 48 : 52;
-    const padHeight = padSize * 2 + 8;
     const usableHeight = height - insets.top - insets.bottom - 16;
-    const boardAspect = state.cols / state.rows;
+    // The board keeps the phone's shape even online, where the field is wide; the camera shows it.
+    const boardAspect = shape.cols / shape.rows;
     const boardWidth = isLandscape
         ? Math.min(width * 0.62, (usableHeight - 76 - gap) * boardAspect)
-        : Math.min(width - insets.left - insets.right - gutter * 2, (usableHeight - topHeight - padHeight - gap * 2) * boardAspect);
+        : Math.min(width - insets.left - insets.right - gutter * 2, (usableHeight - topHeight - gap) * boardAspect);
 
     const board = (
         <View>
             <Board
                 game={game}
                 width={boardWidth}
-                cols={state.cols}
-                rows={state.rows}
+                cols={shape.cols}
+                rows={shape.rows}
                 label={t('boardLabel')}
                 steerable={state.status === 'playing'}
                 zoomable={state.following}
@@ -369,7 +368,6 @@ function GameScreen({ saved }) {
                     </View>
                     <ScrollView style={styles.side} contentContainerStyle={styles.column} keyboardShouldPersistTaps="handled">
                         {header}
-                        <DirectionPad t={t} onTurn={game.queueTurn} size={48} />
                         {leaderboard}
                     </ScrollView>
                 </View>
@@ -386,7 +384,6 @@ function GameScreen({ saved }) {
                         {hudRow}
                     </View>
                     {board}
-                    <DirectionPad t={t} onTurn={game.queueTurn} size={padSize} />
                     {hint}
                     {leaderboard}
                 </ScrollView>

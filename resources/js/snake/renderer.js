@@ -15,9 +15,11 @@ import {
     STEER_OUTLINE,
     aimArrow,
     gearCorners,
+    headAngle,
     headRadius,
     shade,
     starCorners,
+    treatLook,
     stickShape,
 } from './look.js';
 import { skinOf, stripeColor } from './skins.js';
@@ -236,7 +238,7 @@ export function createRenderer(canvas, cols, rows, { label = (powerUp) => powerU
 
         /** The spot on the field under a spot on the canvas, given as fractions (0–1) of its width and height. */
         pointAt(fx, fy) {
-            return pointAt(camera, cols, rows, fx, fy);
+            return pointAt(camera, fx, fy);
         },
 
         draw(world, now, progress, target = null, { zoom = 1, follow = false, aim = null, stick = null } = {}) {
@@ -259,7 +261,7 @@ export function createRenderer(canvas, cols, rows, { label = (powerUp) => powerU
 
             const focus = follow && me?.alive ? points.get(me)[0] : null;
             updateCamera(camera, { width, height, focus, zoom, elapsedMs });
-            const view = viewRect(camera, width, height);
+            const view = viewRect(camera);
             const isVisible = (x, y, margin = CELL * 2) =>
                 x > view.left - margin && x < view.left + view.width + margin && y > view.top - margin && y < view.top + view.height + margin;
 
@@ -404,18 +406,21 @@ export function drawSkinPreview(canvas, skin) {
 }
 
 /**
- * Pixel centers of every body segment, each sliding from its previous cell to its current one.
+ * Pixel centers of every body segment, each sliding from where it was at the last step to where it
+ * is now. The list also carries `angle`: the way the head faces, turning smoothly in between.
  */
 function snakePoints(snake, progress) {
     const previous = snake.previousBody;
 
-    return snake.body.map((cell, i) => {
+    const points = snake.body.map((cell, i) => {
         const from = previous?.[i] ?? cell;
         return {
             x: (from.x + (cell.x - from.x) * progress) * CELL + CELL / 2,
             y: (from.y + (cell.y - from.y) * progress) * CELL + CELL / 2,
         };
     });
+    points.angle = headAngle(snake, progress);
+    return points;
 }
 
 /**
@@ -532,7 +537,7 @@ function drawDecoration(ctx, skin, x, y, size, angle, under) {
 function drawHead(ctx, snake, skin, points, now, lookAt, dead, glow) {
     const head = points[0];
     const radius = headRadius(points.length);
-    const angle = Math.atan2(snake.dir.y, snake.dir.x);
+    const angle = points.angle ?? Math.atan2(snake.dir.y, snake.dir.x);
     const color = stripeColor(skin, 0);
 
     if (glow) {
@@ -677,35 +682,28 @@ function drawFood(ctx, food, world, now, age, progress) {
         return;
     }
 
-    if (food.kind === 'fruit') {
-        const isExpiring = food.expiresAt - world.time < 2500;
-        if (isExpiring && Math.floor(now / 140) % 2 === 0) {
-            return;
-        }
+    // Treats (and a crashed worm's leftovers): big, bobbing and swaying, fading away at the end.
+    if (food.emoji && (food.kind === 'fruit' || food.kind === 'drop')) {
+        const { scale, opacity } = treatLook(food, world.time);
+        const size = grow * scale;
         const bob = Math.sin(now / 260 + food.x) * 2;
 
-        ctx.globalAlpha = 0.3;
+        ctx.globalAlpha = 0.3 * opacity;
         ctx.fillStyle = '#000000';
         ctx.beginPath();
-        ctx.ellipse(cx, cy + CELL * 0.42, CELL * 0.32 * grow, CELL * 0.1 * grow, 0, 0, Math.PI * 2);
+        ctx.ellipse(cx, cy + CELL * 0.42 * size, CELL * 0.32 * size, CELL * 0.1 * size, 0, 0, Math.PI * 2);
         ctx.fill();
 
-        ctx.globalAlpha = 0.22 + Math.sin(now / 300 + food.y) * 0.08;
-        circle(ctx, cx, cy + bob, CELL * 0.75 * grow, '#fde68a');
-        ctx.globalAlpha = 1;
-
+        ctx.globalAlpha = opacity;
         ctx.save();
         ctx.translate(cx, cy - 1 + bob);
-        ctx.scale(grow, grow);
+        ctx.rotate(Math.sin(now / 420 + food.x * 1.7) * 0.18);
+        ctx.scale(size, size);
         ctx.font = EMOJI_FONT;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText(food.emoji, 0, 1);
         ctx.restore();
-
-        const sparkle = (now / 700 + food.x * 0.3) % 1;
-        ctx.globalAlpha = 1 - sparkle;
-        drawSparkle(ctx, cx + CELL * 0.45, cy - CELL * 0.45 + bob, 3.5 * (1 - sparkle) + 1);
         ctx.globalAlpha = 1;
         return;
     }
@@ -730,7 +728,8 @@ function drawFood(ctx, food, world, now, age, progress) {
  * A power-up: a dark glass orb with its icon, a colored glow, and two rings spinning around it.
  */
 function drawPowerUp(ctx, food, world, now, cx, cy, grow) {
-    if (food.expiresAt - world.time < 2500 && Math.floor(now / 140) % 2 === 0) {
+    // Without its look (an unknown power-up from a newer server), there's nothing to draw.
+    if (!food.powerUp || (food.expiresAt - world.time < 2500 && Math.floor(now / 140) % 2 === 0)) {
         return;
     }
     const { color, emoji } = food.powerUp;
@@ -798,17 +797,6 @@ function drawStick(ctx, shape) {
     ctx.stroke();
     ctx.globalAlpha = 1;
     circle(ctx, shape.knobX, shape.knobY, shape.knobRadius, STEER_COLOR);
-}
-
-function drawSparkle(ctx, x, y, size) {
-    ctx.fillStyle = '#ffffff';
-    ctx.beginPath();
-    ctx.moveTo(x, y - size);
-    ctx.quadraticCurveTo(x, y, x + size, y);
-    ctx.quadraticCurveTo(x, y, x, y + size);
-    ctx.quadraticCurveTo(x, y, x - size, y);
-    ctx.quadraticCurveTo(x, y, x, y - size);
-    ctx.fill();
 }
 
 /**

@@ -87,6 +87,7 @@ export function createRemoteWorld() {
                 isPlayer: packed.isPlayer,
                 alive: packed.alive,
                 angle,
+                previousAngle: wasMoving ? snake.angle : angle,
                 dir: { x: Math.cos(angle), y: Math.sin(angle) },
                 previousBody: wasMoving ? snake.body : null,
                 body,
@@ -111,6 +112,8 @@ export function createRemoteWorld() {
         ...event,
         snake: byId.get(event.snakeId) ?? null,
         ...(event.powerUp ? { powerUp: POWER_UPS_BY_TYPE[event.powerUp] } : {}),
+        // A picked-up power-up is drawn once more as it's eaten, so it needs its look back too.
+        ...(event.food && event.powerUp ? { food: { ...event.food, powerUp: POWER_UPS_BY_TYPE[event.powerUp] } } : {}),
         ...(event.cause ? { cause: { type: event.cause.type, other: byId.get(event.cause.otherId) ?? null } } : {}),
     });
 

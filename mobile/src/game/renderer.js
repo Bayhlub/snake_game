@@ -9,6 +9,7 @@ import {
     bodyBeads,
     bodyRadius,
     createCamera,
+    fitView,
     decorationSpots,
     floorChips,
     foodColor,
@@ -17,6 +18,7 @@ import {
     STEER_OUTLINE,
     aimArrow,
     gearCorners,
+    headAngle,
     headRadius,
     isEffectActive,
     pointAt,
@@ -25,6 +27,7 @@ import {
     starCorners,
     stickShape,
     stripeColor,
+    treatLook,
     updateCamera,
     viewRect,
 } from './shared';
@@ -251,27 +254,29 @@ export function createRenderer({ label = (powerUp) => powerUp.label, youLabel = 
             return;
         }
 
-        if (food.kind === 'fruit') {
-            const isExpiring = food.expiresAt - world.time < 2500;
-            if (isExpiring && Math.floor(now / 140) % 2 === 0) {
-                return;
-            }
+        // Treats (and a crashed worm's leftovers): big, bobbing and swaying, fading away at the end.
+        if (food.emoji && (food.kind === 'fruit' || food.kind === 'drop')) {
+            const { scale, opacity } = treatLook(food, world.time);
+            const size = grow * scale;
             const bob = Math.sin(now / 260 + food.x) * 2;
+            if (opacity < 1) {
+                canvas.saveLayer(paint(fill, '#000000', opacity));
+            }
 
-            oval(canvas, cx, cy + CELL * 0.42, CELL * 0.32 * grow, CELL * 0.1 * grow, paint(fill, '#000000', 0.3));
-            circle(canvas, cx, cy + bob, CELL * 0.75 * grow, '#fde68a', 0.22 + Math.sin(now / 300 + food.y) * 0.08);
+            oval(canvas, cx, cy + CELL * 0.42 * size, CELL * 0.32 * size, CELL * 0.1 * size, paint(fill, '#000000', 0.3));
 
             canvas.save();
             canvas.translate(cx, cy - 1 + bob);
-            canvas.scale(grow, grow);
+            canvas.rotate(Math.sin(now / 420 + food.x * 1.7) * 0.18 * (180 / Math.PI), 0, 0);
+            canvas.scale(size, size);
             if (!drawCenteredText(canvas, food.emoji, CELL * 0.95, '#ffffff', 0, 1)) {
-                circle(canvas, 0, 1, CELL * 0.38, '#fb7185');
-                circle(canvas, -CELL * 0.12, -CELL * 0.1, CELL * 0.1, '#fecdd3');
+                circle(canvas, 0, 1, CELL * 0.38, food.color ?? '#fb7185');
+                circle(canvas, -CELL * 0.12, -CELL * 0.1, CELL * 0.1, '#ffffff', 0.6);
             }
             canvas.restore();
-
-            const sparkle = (now / 700 + food.x * 0.3) % 1;
-            drawSparkle(canvas, cx + CELL * 0.45, cy - CELL * 0.45 + bob, 3.5 * (1 - sparkle) + 1, 1 - sparkle);
+            if (opacity < 1) {
+                canvas.restore();
+            }
             return;
         }
 
@@ -290,7 +295,8 @@ export function createRenderer({ label = (powerUp) => powerUp.label, youLabel = 
      * A power-up: a dark glass orb with its icon, a colored glow, and two rings spinning around it.
      */
     function drawPowerUp(canvas, food, world, now, cx, cy, grow) {
-        if (food.expiresAt - world.time < 2500 && Math.floor(now / 140) % 2 === 0) {
+        // Without its look (an unknown power-up from a newer server), there's nothing to draw.
+        if (!food.powerUp || (food.expiresAt - world.time < 2500 && Math.floor(now / 140) % 2 === 0)) {
             return;
         }
         const { color, emoji } = food.powerUp;
@@ -418,7 +424,7 @@ export function createRenderer({ label = (powerUp) => powerUp.label, youLabel = 
 
         /** The spot on the field under a spot on the board, given as fractions (0–1) of its width and height. */
         pointAt(fx, fy) {
-            return pointAt(camera, shownShape.cols, shownShape.rows, fx, fy);
+            return pointAt(camera, fx, fy);
         },
 
         /**
@@ -450,15 +456,20 @@ export function createRenderer({ label = (powerUp) => powerUp.label, youLabel = 
                 camera.x = null;
             }
             const focus = follow && me?.alive ? points.get(me)[0] : null;
-            updateCamera(camera, { width: WIDTH, height: HEIGHT, focus, zoom, elapsedMs });
-            const view = viewRect(camera, WIDTH, HEIGHT);
+            // The board on screen keeps the phone's shape; online the field can be another shape (wide), so
+            // it fits inside, and the camera shows as much of it as the board has room for.
+            const fit = fitView(WIDTH, HEIGHT, width, height);
+            const SCREEN_W = fit.viewWidth;
+            const SCREEN_H = fit.viewHeight;
+            updateCamera(camera, { width: WIDTH, height: HEIGHT, viewWidth: SCREEN_W, viewHeight: SCREEN_H, focus, zoom, elapsedMs });
+            const view = viewRect(camera);
             const isVisible = (x, y, margin = CELL * 2) =>
                 x > view.left - margin && x < view.left + view.width + margin && y > view.top - margin && y < view.top + view.height + margin;
 
             const recorder = Skia.PictureRecorder();
             const canvas = recorder.beginRecording(Skia.XYWHRect(0, 0, width, height));
-            canvas.scale(width / WIDTH, height / HEIGHT);
-            canvas.drawRect(Skia.XYWHRect(0, 0, WIDTH, HEIGHT), paint(fill, VOID_COLOR));
+            canvas.scale(fit.scale, fit.scale);
+            canvas.drawRect(Skia.XYWHRect(0, 0, SCREEN_W, SCREEN_H), paint(fill, VOID_COLOR));
 
             canvas.save();
             if (now < shake.until) {
@@ -540,21 +551,21 @@ export function createRenderer({ label = (powerUp) => powerUp.label, youLabel = 
             canvas.restore();
 
             if (players.some((player) => isEffectActive(world, 'slow', player))) {
-                canvas.drawRect(Skia.XYWHRect(0, 0, WIDTH, HEIGHT), paint(fill, SLOW_TINT, 0.12 + Math.sin(now / 400) * 0.03));
+                canvas.drawRect(Skia.XYWHRect(0, 0, SCREEN_W, SCREEN_H), paint(fill, SLOW_TINT, 0.12 + Math.sin(now / 400) * 0.03));
             }
-            drawVignette(canvas, WIDTH, HEIGHT);
+            drawVignette(canvas, SCREEN_W, SCREEN_H);
 
             const mapOpacity = Math.min(1, (camera.zoom - 1) * 3);
             if (mapOpacity > 0.02) {
-                drawMinimap(canvas, world, points, me, view, WIDTH, HEIGHT, mapOpacity);
+                drawMinimap(canvas, world, points, me, view, WIDTH, HEIGHT, mapOpacity, SCREEN_W, SCREEN_H);
             }
 
             if (stick) {
-                drawStick(canvas, stickShape(stick, WIDTH, HEIGHT));
+                drawStick(canvas, stickShape(stick, SCREEN_W, SCREEN_H));
             }
 
             if (now < flash.until) {
-                canvas.drawRect(Skia.XYWHRect(0, 0, WIDTH, HEIGHT), paint(fill, flash.color, flash.strength * ((flash.until - now) / flash.duration)));
+                canvas.drawRect(Skia.XYWHRect(0, 0, SCREEN_W, SCREEN_H), paint(fill, flash.color, flash.strength * ((flash.until - now) / flash.duration)));
             }
 
             return recorder.finishRecordingAsPicture();
@@ -576,18 +587,21 @@ export function skinPreview(skin, width, height) {
 }
 
 /**
- * Pixel centers of every body segment, each sliding from its previous cell to its current one.
+ * Pixel centers of every body segment, each sliding from where it was at the last step to where it
+ * is now. The list also carries `angle`: the way the head faces, turning smoothly in between.
  */
 function snakePoints(snake, progress) {
     const previous = snake.previousBody;
 
-    return snake.body.map((cell, i) => {
+    const points = snake.body.map((cell, i) => {
         const from = previous?.[i] ?? cell;
         return {
             x: (from.x + (cell.x - from.x) * progress) * CELL + CELL / 2,
             y: (from.y + (cell.y - from.y) * progress) * CELL + CELL / 2,
         };
     });
+    points.angle = headAngle(snake, progress);
+    return points;
 }
 
 /**
@@ -694,7 +708,7 @@ function drawDecoration(canvas, skin, x, y, size, angle, under) {
 function drawHead(canvas, snake, skin, points, now, lookAt, dead, glow) {
     const head = points[0];
     const radius = headRadius(points.length);
-    const radians = Math.atan2(snake.dir.y, snake.dir.x);
+    const radians = points.angle ?? Math.atan2(snake.dir.y, snake.dir.x);
     const color = stripeColor(skin, 0);
 
     if (glow) {
@@ -784,16 +798,6 @@ function drawStick(canvas, shape) {
     circle(canvas, shape.knobX, shape.knobY, shape.knobRadius, STEER_COLOR);
 }
 
-function drawSparkle(canvas, x, y, size, alpha) {
-    const path = Skia.PathBuilder.Make();
-    path.moveTo(x, y - size);
-    path.quadTo(x, y, x + size, y);
-    path.quadTo(x, y, x, y + size);
-    path.quadTo(x, y, x - size, y);
-    path.quadTo(x, y, x, y - size);
-    canvas.drawPath(path.build(), paint(fill, '#ffffff', alpha));
-}
-
 /**
  * The arena's edge: a red glow warning you near the wall and a red-and-white candy stripe around it.
  */
@@ -841,12 +845,12 @@ function drawWall(canvas, WIDTH, HEIGHT) {
  * A small map of the whole field in the corner while zoomed in: every worm's head, yours ringed
  * in white, and a frame around the part you're looking at.
  */
-function drawMinimap(canvas, world, points, me, view, WIDTH, HEIGHT, opacity) {
-    // Upright fields get a narrower map so it doesn't cover too much of the board.
-    const mapWidth = Math.min(WIDTH * (WIDTH > HEIGHT ? 0.22 : 0.26), 190);
+function drawMinimap(canvas, world, points, me, view, WIDTH, HEIGHT, opacity, SCREEN_W, SCREEN_H) {
+    // The map has the field's shape and sits in the bottom corner of the screen.
+    const mapWidth = Math.min(SCREEN_W * (WIDTH > HEIGHT ? 0.3 : 0.26), 190);
     const mapHeight = (mapWidth * HEIGHT) / WIDTH;
-    const x0 = WIDTH - mapWidth - 12;
-    const y0 = HEIGHT - mapHeight - 12;
+    const x0 = SCREEN_W - mapWidth - 12;
+    const y0 = SCREEN_H - mapHeight - 12;
     const s = mapWidth / WIDTH;
     const frame = Skia.RRectXY(Skia.XYWHRect(x0, y0, mapWidth, mapHeight), 8, 8);
 

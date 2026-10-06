@@ -2,6 +2,7 @@ import { Canvas, Picture } from '@shopify/react-native-skia';
 import { useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { followStick } from '../game/shared';
 import { colors, fonts } from '../theme';
 
 /** Each +/− press zooms by this much. */
@@ -61,12 +62,14 @@ export function Board({ game, width, cols, rows, label, steerable, zoomable, zoo
         }
         const { locationX, locationY, pageX, pageY } = event.nativeEvent;
         if (!stick.current) {
-            const base = { fx: Math.min(1, Math.max(0, locationX / width)), fy: Math.min(1, Math.max(0, locationY / height)) };
-            stick.current = { base, pageX, pageY };
+            const at = { fx: Math.min(1, Math.max(0, locationX / width)), fy: Math.min(1, Math.max(0, locationY / height)) };
+            stick.current = { base: at, origin: { ...at, pageX, pageY } };
         }
-        // Only how far the finger has moved matters, so it can wander past the board's edge.
-        const { base } = stick.current;
-        game.steerStick({ base, knob: { fx: base.fx + (pageX - stick.current.pageX) / width, fy: base.fy + (pageY - stick.current.pageY) / height } });
+        // Measured from where the finger went down, so it can wander past the board's edge.
+        const { origin } = stick.current;
+        const knob = { fx: origin.fx + (pageX - origin.pageX) / width, fy: origin.fy + (pageY - origin.pageY) / height };
+        stick.current.base = followStick(stick.current.base, knob, cols, rows);
+        game.steerStick({ base: stick.current.base, knob });
     };
     const release = () => {
         if (pinch.current) {

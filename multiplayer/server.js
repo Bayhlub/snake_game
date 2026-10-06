@@ -24,7 +24,8 @@ const http = createServer((request, response) => {
     response.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
     response.end(`Snake multiplayer server: ${players.size} playing\n`);
 });
-const sockets = new WebSocketServer({ server: http });
+// Board updates go out 20 times a second; compressing them makes them several times smaller.
+const sockets = new WebSocketServer({ server: http, perMessageDeflate: { threshold: 1024 } });
 
 sockets.on('connection', (socket) => {
     socket.on('message', (raw) => {

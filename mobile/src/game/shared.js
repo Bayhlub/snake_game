@@ -6,5 +6,5 @@ export * from '../../../resources/js/snake/skins.js';
 export { LANGUAGES, describeBotCrash, describePlayerCrash, pickLanguage, translator } from '../../../resources/js/snake/i18n.js';
 export { connectOnline } from '../../../resources/js/snake/online.js';
 export { activePowerUps, createWorld, getPlayer, isEffectActive, step, tickDuration } from '../../../resources/js/snake/world.js';
-export { stickVector } from '../../../resources/js/snake/steering.js';
+export { followStick, stickVector } from '../../../resources/js/snake/steering.js';
 export { wrapAngle } from '../../../resources/js/snake/space.js';

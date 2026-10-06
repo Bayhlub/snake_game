@@ -4,9 +4,9 @@ import { isInside, wrapAngle } from './space.js';
 /** Headings a bot considers, as turns from where it's going now (radians). */
 const TRIES = [0, -0.35, 0.35, -0.75, 0.75, -1.2, 1.2, -1.7, 1.7, Math.PI];
 /** How far ahead (in cells) a bot looks along each heading for walls and other worms. */
-const LOOK_AHEAD = [1, 2, 3.2, 4.5, 6];
+const LOOK_AHEAD = [1, 2, 3.2, 4.5, 6, 7.5];
 /** How close (in cells) another worm may come to a bot's path before the bot steers away. */
-const ROOM = 1.3;
+const ROOM = 1.6;
 
 /**
  * Pick where a computer worm steers next: toward the best nearby food, while keeping clear of
@@ -46,7 +46,7 @@ export function chooseBotAngle(world, bot, bodies) {
 }
 
 /**
- * The food a bot goes for: the closest, with fruit counting as a bit closer. Bots leave power-ups
+ * The food a bot goes for: the closest, with treats counting as a bit closer. Bots leave power-ups
  * alone, and food right by a wall, which they couldn't turn away from in time.
  */
 function pickTarget(world, head) {
@@ -57,7 +57,7 @@ function pickTarget(world, head) {
         if (food.kind === 'power' || !isInside(world, food.x, food.y, 2)) {
             continue;
         }
-        const distance = Math.hypot(food.x - head.x, food.y - head.y) - (food.kind === 'fruit' ? 5 : 0);
+        const distance = Math.hypot(food.x - head.x, food.y - head.y) - (food.kind === 'fruit' ? 5 : food.kind === 'drop' ? 3 : 0);
         if (distance < bestDistance) {
             bestDistance = distance;
             best = food;

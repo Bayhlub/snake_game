@@ -72,7 +72,9 @@ test('a crashed player turns into food and waits, while the game goes on for eve
     assert.equal(bai.alive, false);
     assert.equal(bai.deathCause.type, 'wall');
     assert.equal(world.over, false);
-    assert.ok(world.foods.some((food) => food.kind === 'drop'));
+    const leftovers = world.foods.filter((food) => food.kind === 'drop');
+    assert.ok(leftovers.length > 0);
+    assert.ok(leftovers.every((food) => food.emoji && food.points === 2 && food.color === bai.color), 'a trail of treats in its color');
     assert.ok(noy.alive);
 
     bai.points = 7;

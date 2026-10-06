@@ -8,25 +8,34 @@ export const START_LENGTH = 6;
 export const CELLS_PER_FOOD = 220;
 export const FOOD = { points: 1, grow: 1 };
 
-/** Small fruit is common and worth a little; big fruit is rare and worth a lot. */
+/**
+ * Treats scattered around the arena, like Worms Zone: sweets, fruit and fast food. Small ones are
+ * common and worth a little; big ones are rare, drawn bigger, and worth a lot.
+ */
 export const FRUITS = [
-    { emoji: '🍒', points: 3, grow: 2, weight: 4 },
-    { emoji: '🍓', points: 3, grow: 2, weight: 4 },
-    { emoji: '🫐', points: 3, grow: 2, weight: 3 },
-    { emoji: '🍎', points: 5, grow: 3, weight: 3 },
-    { emoji: '🍇', points: 5, grow: 3, weight: 3 },
-    { emoji: '🍊', points: 5, grow: 3, weight: 3 },
-    { emoji: '🍌', points: 5, grow: 3, weight: 3 },
-    { emoji: '🍑', points: 5, grow: 3, weight: 2 },
-    { emoji: '🥭', points: 7, grow: 3, weight: 2 },
-    { emoji: '🍍', points: 7, grow: 3, weight: 2 },
-    { emoji: '🥥', points: 7, grow: 3, weight: 1 },
+    { emoji: '🍬', points: 3, grow: 2, weight: 4 },
+    { emoji: '🍭', points: 3, grow: 2, weight: 4 },
+    { emoji: '🍪', points: 3, grow: 2, weight: 3 },
+    { emoji: '🍓', points: 3, grow: 2, weight: 3 },
+    { emoji: '🍩', points: 5, grow: 3, weight: 3 },
+    { emoji: '🧁', points: 5, grow: 3, weight: 3 },
+    { emoji: '🍫', points: 5, grow: 3, weight: 2 },
+    { emoji: '🍦', points: 5, grow: 3, weight: 2 },
+    { emoji: '🍎', points: 5, grow: 3, weight: 2 },
+    { emoji: '🍕', points: 7, grow: 3, weight: 2 },
+    { emoji: '🍔', points: 7, grow: 3, weight: 2 },
+    { emoji: '🍟', points: 7, grow: 3, weight: 1 },
+    { emoji: '🍣', points: 7, grow: 3, weight: 1 },
+    { emoji: '🍰', points: 10, grow: 4, weight: 1 },
     { emoji: '🍉', points: 10, grow: 4, weight: 1 },
 ];
 export const MAX_FRUITS = 14;
 export const FRUIT_LIFETIME_MS = 15000;
 export const FRUIT_SPAWN_MIN_MS = 250;
 export const FRUIT_SPAWN_MAX_MS = 700;
+/** A crashed worm turns into a trail of these treats, in its own color, worth DROP points each. */
+export const DROP_TREATS = ['🍬', '🍭', '🍩', '🧁', '🍪', '🍫'];
+export const DROP = { points: 2, grow: 1 };
 export const DROP_LIFETIME_MS = 15000;
 
 /**
@@ -59,19 +68,21 @@ export const SPAWN_GRACE_MS = 2500;
  * smoothly in between.
  */
 export const TICK_MS = 50;
-export const MULTIPLAYER_TICK_MS = 100;
-/** How fast worms move, in cells per second. Solo you speed up as you grow; online everyone keeps one pace. */
-export const START_SPEED = 4.2;
-export const MAX_SPEED = 6.2;
-export const SPEED_PER_SEGMENT = 0.03;
-export const MULTIPLAYER_SPEED = 5;
-/** How fast a worm can turn, in radians per second. */
-export const TURN_RATE = 4.5;
+export const MULTIPLAYER_TICK_MS = 50;
+/** How fast worms move, in cells per second. Like Worms Zone, it stays the same however long a worm grows. */
+export const SPEED = 4.6;
+/**
+ * The tightest circle a worm can turn in, in cells, like Worms Zone: wide enough that a U-turn makes
+ * a round loop instead of folding the body over itself. Faster worms turn quicker to keep it the same.
+ */
+export const TURN_RADIUS = 1.3;
 /** The body is a chain of points this far apart along the worm's trail, one per segment. */
 export const SEGMENT_SPACING = 1;
 /** A head this close to another worm's body (in cells) runs into it; this close to food, eats it. */
 export const HIT_DISTANCE = 0.8;
 export const EAT_DISTANCE = 1;
+/** Treats are drawn big, so a head reaches them from a little further away. */
+export const TREAT_REACH = 1.5;
 
 /** Online play: the game server's port and how many can join. Each player wears the skin they picked. */
 export const MULTIPLAYER_PORT = 8787;

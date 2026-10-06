@@ -135,6 +135,27 @@ describe('moving', () => {
     });
 });
 
+describe('treats', () => {
+    test('big treats are eaten from a little further away than food dots', () => {
+        const world = makeWorld({ x: 20, y: 20 });
+        world.foods.push({ kind: 'fruit', x: 20.2, y: 21.3, emoji: '🍩', points: 5, grow: 3, expiresAt: 99999 });
+        world.foods.push({ kind: 'food', x: 20.2, y: 18.7, points: 1, grow: 1 });
+
+        run(world, 50);
+
+        assert.equal(world.points, 5, 'the donut beside the head was eaten, the dot as far the other side was not');
+    });
+});
+
+describe('speed', () => {
+    test('a worm keeps the same speed however long it grows, like Worms Zone', () => {
+        const short = makeWorld({ x: 20, y: 20, length: 4 });
+        const long = makeWorld({ x: 30, y: 20, length: 60 });
+
+        assert.equal(worldSpeed(long), worldSpeed(short));
+    });
+});
+
 describe('shield', () => {
     test('without it, hitting the wall ends the game', () => {
         const world = makeWorld({ x: COLS - 0.6, y: 10 });

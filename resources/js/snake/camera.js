@@ -15,54 +15,67 @@ export function clampZoom(zoom) {
 }
 
 /**
- * The camera looks at a `width` × `height` field (in board pixels). It is drawn into a view of the
- * same shape, so zoom 1 is the whole field and zoom 2 is a quarter of it.
+ * How a `width` × `height` field (in board pixels) fits on a screen of another shape at zoom 1:
+ * `scale` screen pixels per board pixel, and the board-pixel size of the whole screen, which is the
+ * field plus empty space beside it when the shapes differ (a wide online field on an upright phone).
+ */
+export function fitView(width, height, screenWidth, screenHeight) {
+    const scale = Math.min(screenWidth / width, screenHeight / height);
+    return { scale, viewWidth: screenWidth / scale, viewHeight: screenHeight / scale };
+}
+
+/**
+ * The camera looks at a field `width` × `height` (in board pixels) through a view that shows
+ * `viewWidth` × `viewHeight` of it at zoom 1: the whole field, and some empty space beside it if
+ * the view is another shape. Zoom 2 shows half as much each way.
  */
 export function createCamera() {
-    return { x: null, y: null, zoom: MIN_ZOOM };
+    return { x: null, y: null, zoom: MIN_ZOOM, viewWidth: 1, viewHeight: 1 };
 }
 
 /**
  * Move the camera toward `focus` (a point in board pixels, or null to show the whole field) at
  * `zoom`. It eases there over a few frames instead of jumping.
  */
-export function updateCamera(camera, { width, height, focus, zoom, elapsedMs }) {
+export function updateCamera(camera, { width, height, viewWidth = width, viewHeight = height, focus, zoom, elapsedMs }) {
+    camera.viewWidth = viewWidth;
+    camera.viewHeight = viewHeight;
     const targetZoom = focus ? clampZoom(zoom) : MIN_ZOOM;
     const first = camera.x === null;
     camera.zoom = first ? targetZoom : ease(camera.zoom, targetZoom, elapsedMs, ZOOM_MS);
 
-    const center = focus ? clampCenter(focus, camera.zoom, width, height) : { x: width / 2, y: height / 2 };
+    const center = focus ? clampCenter(camera, focus, width, height) : { x: width / 2, y: height / 2 };
     camera.x = first ? center.x : ease(camera.x, center.x, elapsedMs, FOLLOW_MS);
     camera.y = first ? center.y : ease(camera.y, center.y, elapsedMs, FOLLOW_MS);
     // While zooming out the view grows, so keep it inside the allowed area every frame.
-    const clamped = clampCenter({ x: camera.x, y: camera.y }, camera.zoom, width, height);
+    const clamped = clampCenter(camera, { x: camera.x, y: camera.y }, width, height);
     camera.x = clamped.x;
     camera.y = clamped.y;
     return camera;
 }
 
 /** The part of the field the camera shows, in board pixels. */
-export function viewRect(camera, width, height) {
-    const viewWidth = width / camera.zoom;
-    const viewHeight = height / camera.zoom;
-    return { left: camera.x - viewWidth / 2, top: camera.y - viewHeight / 2, width: viewWidth, height: viewHeight };
+export function viewRect(camera) {
+    const width = camera.viewWidth / camera.zoom;
+    const height = camera.viewHeight / camera.zoom;
+    return { left: camera.x - width / 2, top: camera.y - height / 2, width, height };
 }
 
 /**
  * The spot on the field (in cells, like worm positions) under a point on screen, given as
  * fractions (0–1) of the view's width and height.
  */
-export function pointAt(camera, cols, rows, fx, fy) {
-    const view = viewRect(camera, cols * CELL, rows * CELL);
+export function pointAt(camera, fx, fy) {
+    const view = viewRect(camera);
     return { x: (view.left + fx * view.width) / CELL - 0.5, y: (view.top + fy * view.height) / CELL - 0.5 };
 }
 
-function clampCenter(point, zoom, width, height) {
+function clampCenter(camera, point, width, height) {
     // Fully zoomed out there's no room to look past the walls; the margin grows as you zoom in.
-    const margin = EDGE_MARGIN * CELL * Math.min(1, Math.max(0, (zoom - 1) * 2));
+    const margin = EDGE_MARGIN * CELL * Math.min(1, Math.max(0, (camera.zoom - 1) * 2));
     return {
-        x: clampAxis(point.x, width / zoom / 2, width, margin),
-        y: clampAxis(point.y, height / zoom / 2, height, margin),
+        x: clampAxis(point.x, camera.viewWidth / camera.zoom / 2, width, margin),
+        y: clampAxis(point.y, camera.viewHeight / camera.zoom / 2, height, margin),
     };
 }
 

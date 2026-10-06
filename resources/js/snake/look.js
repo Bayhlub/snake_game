@@ -1,4 +1,6 @@
 import { CELL } from './config.js';
+import { wrapAngle } from './space.js';
+import { STICK_SIZE } from './steering.js';
 
 /**
  * The shapes and colors of the Worms Zone look, shared by the web renderer (canvas) and the
@@ -21,9 +23,21 @@ export function foodColor(food) {
     return FOOD_COLORS[hashCell(food.x, food.y) % FOOD_COLORS.length];
 }
 
+/**
+ * How big a treat is drawn: big, and bigger the more it's worth; a crashed worm's leftovers a
+ * little smaller. Near the end of its life it fades away (`opacity`) instead of blinking.
+ */
+export function treatLook(food, time) {
+    const left = food.expiresAt ? food.expiresAt - time : Infinity;
+    return {
+        scale: food.kind === 'drop' ? 1.15 : 1.4 + food.points * 0.06,
+        opacity: Math.max(0, Math.min(1, left / 2000)),
+    };
+}
+
 /** Food dots come in a few sizes; leftovers from a crash are the biggest. */
 export function foodRadius(food) {
-    return (food.kind === 'drop' ? 0.36 : 0.24 + (hashCell(food.x, food.y) % 5) * 0.03) * CELL;
+    return (food.kind === 'drop' ? 0.42 : 0.3 + (hashCell(food.x, food.y) % 5) * 0.035) * CELL;
 }
 
 function hashCell(x, y) {
@@ -48,7 +62,9 @@ function taper(segment, length) {
 
 /**
  * The body as overlapping round beads, two per segment, from the tail up to the head.
- * Each bead knows which segment it belongs to (for the stripes) and its size.
+ * The beads between the body's points follow a smooth curve through them, so a worm turning in a
+ * circle looks round rather than like a polygon. Each bead knows which segment it belongs to (for
+ * the stripes) and its size.
  */
 export function bodyBeads(points) {
     const length = points.length;
@@ -57,15 +73,19 @@ export function bodyBeads(points) {
     for (let i = length - 1; i >= 1; i--) {
         for (const t of [0, 0.5]) {
             const segment = i - t;
-            beads.push({
-                x: points[i].x + (points[i - 1].x - points[i].x) * t,
-                y: points[i].y + (points[i - 1].y - points[i].y) * t,
-                segment: Math.round(segment),
-                r: radius * taper(segment, length),
-            });
+            const { x, y } = t === 0 ? points[i] : curveBetween(points[i + 1] ?? points[i], points[i], points[i - 1], points[i - 2] ?? points[i - 1], t);
+            beads.push({ x, y, segment: Math.round(segment), r: radius * taper(segment, length) });
         }
     }
     return beads;
+}
+
+/** A point `t` of the way from b to c on a smooth (Catmull-Rom) curve through a, b, c and d. */
+function curveBetween(a, b, c, d, t) {
+    const t2 = t * t;
+    const t3 = t2 * t;
+    const along = (p0, p1, p2, p3) => 0.5 * (2 * p1 + (p2 - p0) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 + (3 * p1 - p0 - 3 * p2 + p3) * t3);
+    return { x: along(a.x, b.x, c.x, d.x), y: along(a.y, b.y, c.y, d.y) };
 }
 
 /**
@@ -89,7 +109,7 @@ export const STEER_OUTLINE = '#7c2d12';
  * the finger went down, and the knob, which follows the finger but stays inside the ring.
  */
 export function stickShape(stick, width, height) {
-    const radius = Math.min(width, height) * 0.13;
+    const radius = Math.min(width, height) * STICK_SIZE;
     const x = stick.base.fx * width;
     const y = stick.base.fy * height;
     let dx = (stick.knob.fx - stick.base.fx) * width;
@@ -120,6 +140,18 @@ export function aimArrow(head, aim, length) {
             [-size * 0.6, size * 0.8],
         ],
     };
+}
+
+/**
+ * The way a worm's head faces, turning smoothly from where it faced at the last step to where it
+ * faces now as `progress` goes from 0 to 1.
+ */
+export function headAngle(snake, progress) {
+    const to = Math.atan2(snake.dir.y, snake.dir.x);
+    if (snake.previousAngle == null) {
+        return to;
+    }
+    return snake.previousAngle + wrapAngle(to - snake.previousAngle) * progress;
 }
 
 /** The outline of a gear (16 corners per tooth pair), centered on 0, 0. */

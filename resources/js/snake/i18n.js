@@ -10,7 +10,7 @@ export const LANGUAGES = [
 const MESSAGES = {
     en: {
         title: 'Snake',
-        tagline: "Eat food and fruit, grow long, and don't crash into the other snakes.",
+        tagline: "Eat food and treats, grow long, and don't crash into the other snakes.",
         language: 'Language',
         soundOn: '🔊 Sound on',
         soundOff: '🔇 Sound off',
@@ -59,7 +59,7 @@ const MESSAGES = {
         steerMouse: '🖱️ Move your mouse over the board to steer, or use',
         pauseKey: 'pause',
         soundKey: 'sound',
-        steerTouch: '👆 Put a finger anywhere on the board and drag the way you want to go, like a joystick. Or use the buttons.',
+        steerTouch: '👆 Put a finger anywhere on the board and drag the way you want to go, like a joystick.',
 
         playOnline: '🌐 Play online',
         joinTitle: 'Play online',
@@ -84,10 +84,10 @@ const MESSAGES = {
 
         howToPlay: 'How to play',
         food: 'Food',
-        fruitFades: 'Fruit disappears after a few seconds.',
+        fruitFades: 'Treats disappear after a few seconds.',
         crashRule: 'Hit a wall or another snake: game over.',
         crossRule: 'Crossing your own body is safe.',
-        botRule: 'If another snake runs into you, it crashes and turns into food.',
+        botRule: 'If another snake runs into you, it crashes and turns into a trail of treats (+2 each).',
         powerUps: 'Power-ups',
         powerUpsFade: 'They glow, spin and vanish if you wait too long.',
 
@@ -107,10 +107,6 @@ const MESSAGES = {
         'name.Berry': 'Berry',
         'name.Coco': 'Coco',
 
-        up: 'Up',
-        down: 'Down',
-        left: 'Left',
-        right: 'Right',
         boardLabel: 'Snake game board. Touch and drag to steer.',
 
         pickWorm: 'Pick your worm',
@@ -132,7 +128,7 @@ const MESSAGES = {
 
     lo: {
         title: 'ເກມງູ',
-        tagline: 'ກິນອາຫານ ແລະ ໝາກໄມ້ ໃຫ້ໂຕຍາວຂຶ້ນ ແລະ ຢ່າຕຳງູໂຕອື່ນ.',
+        tagline: 'ກິນອາຫານ ແລະ ຂອງແຊບ ໃຫ້ໂຕຍາວຂຶ້ນ ແລະ ຢ່າຕຳງູໂຕອື່ນ.',
         language: 'ພາສາ',
         soundOn: '🔊 ເປີດສຽງ',
         soundOff: '🔇 ປິດສຽງ',
@@ -181,7 +177,7 @@ const MESSAGES = {
         steerMouse: '🖱️ ເລື່ອນເມົ້າເທິງກະດານເພື່ອບັງຄັບ, ຫຼື ໃຊ້',
         pauseKey: 'ຢຸດ',
         soundKey: 'ສຽງ',
-        steerTouch: '👆 ແຕະບ່ອນໃດກໍໄດ້ເທິງກະດານ ແລ້ວລາກໄປທາງທີ່ຢາກໄປ ຄືກັບຈອຍສະຕິກ. ຫຼື ໃຊ້ປຸ່ມກົດ.',
+        steerTouch: '👆 ແຕະບ່ອນໃດກໍໄດ້ເທິງກະດານ ແລ້ວລາກໄປທາງທີ່ຢາກໄປ ຄືກັບຈອຍສະຕິກ.',
 
         playOnline: '🌐 ຫຼິ້ນອອນລາຍ',
         joinTitle: 'ຫຼິ້ນອອນລາຍ',
@@ -206,10 +202,10 @@ const MESSAGES = {
 
         howToPlay: 'ວິທີຫຼິ້ນ',
         food: 'ອາຫານ',
-        fruitFades: 'ໝາກໄມ້ຈະຫາຍໄປພາຍໃນສອງສາມວິນາທີ.',
+        fruitFades: 'ຂອງແຊບຈະຫາຍໄປພາຍໃນສອງສາມວິນາທີ.',
         crashRule: 'ຕຳກຳແພງ ຫຼື ງູໂຕອື່ນ: ເກມຈົບ.',
         crossRule: 'ຂ້າມຕົວເອງໄດ້ ບໍ່ເປັນຫຍັງ.',
-        botRule: 'ຖ້າງູໂຕອື່ນແລ່ນມາຕຳທ່ານ, ມັນຈະຕາຍ ແລະ ກາຍເປັນອາຫານ.',
+        botRule: 'ຖ້າງູໂຕອື່ນແລ່ນມາຕຳທ່ານ, ມັນຈະຕາຍ ແລະ ກາຍເປັນຂອງແຊບ (+2 ແຕ່ລະອັນ).',
         powerUps: 'ພະລັງພິເສດ',
         powerUpsFade: 'ພວກມັນຈະເຫຼື້ອມ, ໝູນ ແລະ ຫາຍໄປ ຖ້າລໍຖ້າດົນເກີນໄປ.',
 
@@ -229,10 +225,6 @@ const MESSAGES = {
         'name.Berry': 'ເບີຣີ',
         'name.Coco': 'ໝາກພ້າວ',
 
-        up: 'ຂຶ້ນ',
-        down: 'ລົງ',
-        left: 'ຊ້າຍ',
-        right: 'ຂວາ',
         boardLabel: 'ກະດານເກມງູ. ແຕະແລ້ວລາກເພື່ອບັງຄັບ.',
 
         pickWorm: 'ເລືອກໜອນຂອງທ່ານ',

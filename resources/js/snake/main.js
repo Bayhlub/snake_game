@@ -6,7 +6,7 @@ import { createRenderer, drawSkinPreview } from './renderer.js';
 import { SKINS, skinById } from './skins.js';
 import { createSound } from './sound.js';
 import { wrapAngle } from './space.js';
-import { stickVector } from './steering.js';
+import { followStick, stickVector } from './steering.js';
 import { activePowerUps, createWorld, getPlayer, step, tickDuration } from './world.js';
 
 const KEY_DIRECTIONS = {
@@ -738,7 +738,7 @@ export function startSnakeGame(root) {
             mouse = pointerAt(event);
         } else {
             const at = pointerAt(event);
-            stick = { base: at, knob: at, x: event.clientX, y: event.clientY };
+            stick = { base: at, knob: at, origin: { ...at, x: event.clientX, y: event.clientY } };
         }
     });
     elements.canvas.addEventListener('pointermove', (event) => {
@@ -754,9 +754,11 @@ export function startSnakeGame(root) {
         if (event.pointerType === 'mouse') {
             mouse = pointerAt(event);
         } else if (stick && elements.canvas.hasPointerCapture(event.pointerId)) {
-            // Only how far the finger moved matters, so it can wander past the board's edge.
+            // Measured from where the finger went down, so it can wander past the board's edge.
             const rect = elements.canvas.getBoundingClientRect();
-            stick.knob = { fx: stick.base.fx + (event.clientX - stick.x) / rect.width, fy: stick.base.fy + (event.clientY - stick.y) / rect.height };
+            const { origin } = stick;
+            stick.knob = { fx: origin.fx + (event.clientX - origin.x) / rect.width, fy: origin.fy + (event.clientY - origin.y) / rect.height };
+            stick.base = followStick(stick.base, stick.knob, COLS, ROWS);
         }
     });
     for (const type of ['pointerup', 'pointercancel']) {
@@ -787,13 +789,6 @@ export function startSnakeGame(root) {
     $('#zoom-out').addEventListener('click', (event) => {
         setZoom(zoom / ZOOM_STEP);
         event.currentTarget.blur();
-    });
-
-    root.querySelectorAll('[data-direction]').forEach((button) => {
-        button.addEventListener('pointerdown', (event) => {
-            event.preventDefault();
-            queueTurn(button.dataset.direction);
-        });
     });
 
     $('#start-button').addEventListener('click', newGame);
