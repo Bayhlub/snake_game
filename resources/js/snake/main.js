@@ -119,7 +119,7 @@ export function startSnakeGame(root) {
     let saveStatus = null;
     /** The finished game shown on the game-over screen: { points, length, cause }. */
     let result = null;
-    /** While playing online: { connection, world, lastStateAt }. */
+    /** While playing online: { connection, world, lastLength, sentAngle }. */
     let online = null;
 
     /** The world on screen, and the snake this device controls. */
@@ -203,7 +203,7 @@ export function startSnakeGame(root) {
         updateZoomControls();
 
         if (online) {
-            const progress = Math.min((now - online.lastStateAt) / online.world.tickMs, 1);
+            const progress = online.world.progress(now);
             renderer.draw(online.world, now, progress, ...aimFor(online.world.me(), { zoom, follow: state === 'playing' }));
             requestAnimationFrame(frame);
             return;
@@ -247,7 +247,8 @@ export function startSnakeGame(root) {
             return null;
         }
         if (stick) {
-            return stickVector(stick, shownWorld().cols, shownWorld().rows);
+            // Measured on the canvas, which keeps its shape even when the online field is another.
+            return stickVector(stick, COLS, ROWS);
         }
         if (mouse) {
             const point = renderer.pointAt(mouse.fx, mouse.fy);
@@ -347,7 +348,7 @@ export function startSnakeGame(root) {
             skin,
             onJoined(remote) {
                 clearTimeout(slowNotice);
-                online = { connection, world: remote, lastStateAt: performance.now(), lastLength: remote.me().body.length, sentAngle: null };
+                online = { connection, world: remote, lastLength: remote.me().body.length, sentAngle: null };
                 state = 'playing';
                 stopSteering();
                 elements.joinButton.disabled = false;
@@ -358,7 +359,6 @@ export function startSnakeGame(root) {
                 document.activeElement?.blur();
             },
             onState(remote, events) {
-                online.lastStateAt = performance.now();
                 handleEvents(events, remote.tickMs);
                 const player = remote.me();
                 const myCrash = events.find((e) => e.type === 'playerDied' && e.snake === player);

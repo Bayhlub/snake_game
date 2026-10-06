@@ -44,7 +44,7 @@ export function createGame({ sound, translate, shape: initialShape, skin: initia
     let lastFrame = performance.now();
     let best = initialBest;
     let result = null;
-    /** While playing online: { connection, world, lastStateAt, lastLength }. */
+    /** While playing online: { connection, world, lastLength, sentAngle }. */
     let online = null;
 
     const shownWorld = () => online?.world ?? world;
@@ -204,7 +204,7 @@ export function createGame({ sound, translate, shape: initialShape, skin: initia
         const connection = connectOnline(url, name, {
             skin,
             onJoined(remote) {
-                online = { connection, world: remote, lastStateAt: performance.now(), lastLength: remote.me().body.length, sentAngle: null };
+                online = { connection, world: remote, lastLength: remote.me().body.length, sentAngle: null };
                 status = 'playing';
                 result = null;
                 stopSteering();
@@ -212,7 +212,6 @@ export function createGame({ sound, translate, shape: initialShape, skin: initia
                 emit();
             },
             onState(remote, events) {
-                online.lastStateAt = performance.now();
                 handleEvents(events, remote.tickMs);
                 const player = remote.me();
                 const myCrash = events.find((event) => event.type === 'playerDied' && event.snake === player);
@@ -299,7 +298,7 @@ export function createGame({ sound, translate, shape: initialShape, skin: initia
             lastFrame = now;
 
             if (online) {
-                const progress = Math.min((now - online.lastStateAt) / online.world.tickMs, 1);
+                const progress = online.world.progress(now);
                 return draw(online.world, online.world.me(), now, progress, width, height);
             }
 

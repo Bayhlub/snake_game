@@ -1,4 +1,5 @@
 import { POWER_UPS } from './config.js';
+import { wrapAngle } from './space.js';
 
 /**
  * The messages between the multiplayer server and the game on each device.
@@ -57,14 +58,29 @@ export function packEvent(event) {
 }
 
 /**
- * A world on this device that mirrors the server. `update` takes each new state and keeps the
- * last one as `previousBody`, so the renderers can glide snakes between moves as in solo play.
+ * A world on this device that mirrors the server. `update` takes each new state, and the worms
+ * glide from where they were on screen to where the server says they are now, as smoothly as solo.
+ *
+ * Updates don't arrive evenly over the internet: some come late, some bunch up. So each glide takes
+ * about as long as updates have recently been apart (`progress(now)` says how far along it is), and
+ * a new update starts from wherever the worms are drawn at that moment instead of jumping.
  */
 export function createRemoteWorld() {
-    const world = { multiplayer: true, cols: 0, rows: 0, time: 0, snakes: [], foods: [], meId: null, tickMs: 100 };
+    const world = { multiplayer: true, cols: 0, rows: 0, time: 0, snakes: [], foods: [], meId: null, tickMs: 50 };
     const byId = new Map();
+    let receivedAt = null;
+    let interval = null;
 
-    world.update = (state) => {
+    /** How far (0–1) the glide toward the latest update has got by `now`. */
+    world.progress = (now) => (receivedAt === null ? 1 : Math.min(1, (now - receivedAt) / (interval * 1.1)));
+
+    world.update = (state, now = performance.now()) => {
+        const shown = world.progress(now);
+        if (receivedAt !== null) {
+            interval += (Math.min(now - receivedAt, 250) - interval) * 0.15;
+        }
+        interval ??= state.tickMs;
+        receivedAt = now;
         world.time = state.time;
         world.tickMs = state.tickMs;
         world.cols = state.cols;
@@ -80,6 +96,14 @@ export function createRemoteWorld() {
             }
             const wasMoving = snake.alive && packed.alive && snake.body.length > 0;
             const angle = packed.angle ?? 0;
+            // Where the worm is drawn right now, partway through its last glide.
+            const onScreen = wasMoving
+                ? snake.body.map((point, i) => {
+                      const from = snake.previousBody?.[i] ?? point;
+                      return { x: from.x + (point.x - from.x) * shown, y: from.y + (point.y - from.y) * shown };
+                  })
+                : null;
+            const previousAngle = wasMoving ? snake.previousAngle + wrapAngle(snake.angle - snake.previousAngle) * shown : angle;
             Object.assign(snake, {
                 name: packed.name,
                 color: packed.color,
@@ -87,9 +111,9 @@ export function createRemoteWorld() {
                 isPlayer: packed.isPlayer,
                 alive: packed.alive,
                 angle,
-                previousAngle: wasMoving ? snake.angle : angle,
+                previousAngle,
                 dir: { x: Math.cos(angle), y: Math.sin(angle) },
-                previousBody: wasMoving ? snake.body : null,
+                previousBody: onScreen,
                 body,
                 points: packed.points ?? 0,
                 effects: packed.effects ?? {},

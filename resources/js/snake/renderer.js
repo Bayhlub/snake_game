@@ -1,4 +1,4 @@
-import { createCamera, pointAt, updateCamera, viewRect } from './camera.js';
+import { createCamera, fitView, pointAt, updateCamera, viewRect } from './camera.js';
 import { CELL } from './config.js';
 import {
     DEAD_SKIN,
@@ -68,6 +68,7 @@ export function createRenderer(canvas, cols, rows, { label = (powerUp) => powerU
     const layerCtx = layer.getContext('2d');
 
     const camera = createCamera();
+    let shownShape = { cols, rows };
     const foodBornAt = new WeakMap();
     let pending = [];
     let particles = [];
@@ -259,8 +260,16 @@ export function createRenderer(canvas, cols, rows, { label = (powerUp) => powerU
             const me = world.meId != null ? players.find((snake) => snake.id === world.meId) : players[0];
             const points = new Map(world.snakes.map((snake) => [snake, snakePoints(snake, progress)]));
 
+            // The canvas keeps its shape; a field of another shape (the tall online arena) fits inside it.
+            const fieldWidth = world.cols * CELL;
+            const fieldHeight = world.rows * CELL;
+            if (world.cols !== shownShape.cols || world.rows !== shownShape.rows) {
+                shownShape = { cols: world.cols, rows: world.rows };
+                camera.x = null;
+            }
+            const fit = fitView(fieldWidth, fieldHeight, width, height);
             const focus = follow && me?.alive ? points.get(me)[0] : null;
-            updateCamera(camera, { width, height, focus, zoom, elapsedMs });
+            updateCamera(camera, { width: fieldWidth, height: fieldHeight, viewWidth: fit.viewWidth, viewHeight: fit.viewHeight, focus, zoom, elapsedMs });
             const view = viewRect(camera);
             const isVisible = (x, y, margin = CELL * 2) =>
                 x > view.left - margin && x < view.left + view.width + margin && y > view.top - margin && y < view.top + view.height + margin;
@@ -273,12 +282,12 @@ export function createRenderer(canvas, cols, rows, { label = (powerUp) => powerU
                 const strength = shake.magnitude * ((shake.until - now) / shake.duration);
                 ctx.translate((Math.random() * 2 - 1) * strength, (Math.random() * 2 - 1) * strength);
             }
-            ctx.scale(camera.zoom, camera.zoom);
+            ctx.scale(fit.scale * camera.zoom, fit.scale * camera.zoom);
             ctx.translate(-view.left, -view.top);
 
             ctx.fillStyle = floor;
-            ctx.fillRect(0, 0, width, height);
-            drawWall(ctx, width, height);
+            ctx.fillRect(0, 0, fieldWidth, fieldHeight);
+            drawWall(ctx, fieldWidth, fieldHeight);
 
             for (const food of [...world.foods, ...soonEaten]) {
                 if (!foodBornAt.has(food)) {
@@ -373,7 +382,7 @@ export function createRenderer(canvas, cols, rows, { label = (powerUp) => powerU
 
             const mapOpacity = Math.min(1, (camera.zoom - 1) * 3);
             if (mapOpacity > 0.02) {
-                drawMinimap(ctx, world, points, me, view, width, height, mapOpacity);
+                drawMinimap(ctx, world, points, me, view, fieldWidth, fieldHeight, mapOpacity, width, height);
             }
 
             if (stick) {
@@ -838,12 +847,13 @@ function drawWall(ctx, width, height) {
  * A small map of the whole field in the corner while zoomed in: every worm's head, yours ringed
  * in white, and a frame around the part you're looking at.
  */
-function drawMinimap(ctx, world, points, me, view, width, height, opacity) {
-    const mapWidth = Math.min(width * 0.22, 190);
-    const mapHeight = (mapWidth * height) / width;
+function drawMinimap(ctx, world, points, me, view, fieldWidth, fieldHeight, opacity, width, height) {
+    // The map has the field's shape and sits in the bottom corner of the canvas.
+    const mapHeight = Math.min(height * 0.3, (Math.min(width * 0.22, 190) * fieldHeight) / fieldWidth);
+    const mapWidth = (mapHeight * fieldWidth) / fieldHeight;
     const x0 = width - mapWidth - 12;
     const y0 = height - mapHeight - 12;
-    const s = mapWidth / width;
+    const s = mapWidth / fieldWidth;
 
     ctx.save();
     ctx.globalAlpha = opacity;

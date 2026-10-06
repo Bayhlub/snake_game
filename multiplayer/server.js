@@ -3,7 +3,7 @@ import { networkInterfaces } from 'node:os';
 
 import { WebSocketServer } from 'ws';
 
-import { DIRECTION_ANGLES, MAX_PLAYERS, MULTIPLAYER_PORT } from '../resources/js/snake/config.js';
+import { COLS, DIRECTION_ANGLES, MAX_PLAYERS, MULTIPLAYER_PORT, ROWS } from '../resources/js/snake/config.js';
 import { packEvent, packWorld } from '../resources/js/snake/net.js';
 import { SKINS, isSkin, skinById } from '../resources/js/snake/skins.js';
 import { addPlayer, createWorld, removePlayer, respawnPlayer, step, tickDuration } from '../resources/js/snake/world.js';
@@ -16,7 +16,8 @@ import { addPlayer, createWorld, removePlayer, respawnPlayer, step, tickDuration
 const port = Number(process.env.PORT) || MULTIPLAYER_PORT;
 const MAX_NAME_LENGTH = 20;
 
-const world = createWorld(Math.random, { multiplayer: true });
+// The arena stands upright, like solo play on a phone held upright (most players are on phones).
+const world = createWorld(Math.random, { multiplayer: true, cols: ROWS, rows: COLS });
 /** socket => { snake, angle } for everyone who has joined; `angle` is where they last steered. */
 const players = new Map();
 

@@ -4,7 +4,7 @@ import { after, before, test } from 'node:test';
 
 import { WebSocket } from 'ws';
 
-import { START_LENGTH } from '../../resources/js/snake/config.js';
+import { COLS, ROWS, START_LENGTH } from '../../resources/js/snake/config.js';
 import { createRemoteWorld, packEvent } from '../../resources/js/snake/net.js';
 
 const PORT = 18787;
@@ -54,6 +54,8 @@ test('two players join the same board and each sees both snakes move', async () 
 
     const bothOnBoard = (client) => ['Bai', 'Noy'].every((name) => client.world.snakes.some((snake) => snake.isPlayer && snake.name === name));
     await until(() => bothOnBoard(bai) && bothOnBoard(noy));
+    // The online arena stands upright, like solo play on a phone held upright.
+    assert.deepEqual([bai.world.cols, bai.world.rows], [ROWS, COLS]);
 
     const before = bai.world.time;
     await until(() => bai.world.time > before + 400);
@@ -101,4 +103,21 @@ test('a power-up someone picks up arrives with its look, so devices can draw it 
     assert.equal(event.food.kind, 'power');
     assert.equal(event.food.powerUp.type, 'shield');
     assert.equal(event.food.powerUp.color, '#38bdf8');
+});
+
+test('online worms glide on from where they are drawn, even when updates arrive early', () => {
+    const world = createRemoteWorld();
+    const state = (x) => ({ time: 0, tickMs: 50, cols: 40, rows: 56, foods: [], snakes: [{ id: 1, name: 'Bai', color: '#4ade80', isPlayer: true, alive: true, angle: 0, body: [x, 10, x - 1, 10] }] });
+
+    world.update(state(10), 0);
+    world.update(state(11), 50);
+    assert.equal(world.progress(50), 0);
+    assert.ok(world.progress(75) > 0.3 && world.progress(75) < 0.7, 'halfway through the glide');
+
+    // The next update comes early, a quarter of the way into the glide: the worm carries on from
+    // where it is drawn instead of jumping.
+    world.update(state(12), 62.5);
+    const snake = world.snakes[0];
+    assert.ok(snake.previousBody[0].x > 10 && snake.previousBody[0].x < 11, 'it starts from partway along');
+    assert.equal(snake.body[0].x, 12);
 });
