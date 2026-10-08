@@ -10,7 +10,7 @@ import {
     decorationSpots,
     floorChips,
     foodColor,
-    foodRadius,
+    foodEmoji,
     STEER_COLOR,
     STEER_OUTLINE,
     aimArrow,
@@ -692,45 +692,28 @@ function drawFood(ctx, food, world, now, age, progress) {
         return;
     }
 
-    // Treats (and a crashed worm's leftovers): big, bobbing and swaying, fading away at the end.
-    if (food.emoji && (food.kind === 'fruit' || food.kind === 'drop')) {
-        const { scale, opacity } = treatLook(food, world.time);
-        const size = grow * scale;
-        const bob = Math.sin(now / 260 + food.x) * 2;
+    // Food, treats and a crashed worm's leftovers: little meals bobbing and swaying, fading away at the end.
+    const emoji = foodEmoji(food);
+    const { scale, opacity } = treatLook(food, world.time);
+    const size = grow * scale;
+    const bob = Math.sin(now / 260 + food.x) * 2;
 
-        ctx.globalAlpha = 0.3 * opacity;
-        ctx.fillStyle = '#000000';
-        ctx.beginPath();
-        ctx.ellipse(cx, cy + CELL * 0.42 * size, CELL * 0.32 * size, CELL * 0.1 * size, 0, 0, Math.PI * 2);
-        ctx.fill();
+    ctx.globalAlpha = 0.3 * opacity;
+    ctx.fillStyle = '#000000';
+    ctx.beginPath();
+    ctx.ellipse(cx, cy + CELL * 0.42 * size, CELL * 0.32 * size, CELL * 0.1 * size, 0, 0, Math.PI * 2);
+    ctx.fill();
 
-        ctx.globalAlpha = opacity;
-        ctx.save();
-        ctx.translate(cx, cy - 1 + bob);
-        ctx.rotate(Math.sin(now / 420 + food.x * 1.7) * 0.18);
-        ctx.scale(size, size);
-        ctx.font = EMOJI_FONT;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(food.emoji, 0, 1);
-        ctx.restore();
-        ctx.globalAlpha = 1;
-        return;
-    }
-
-    // A glowing candy dot: a soft halo, a bright ball and a little shine.
-    const color = foodColor(food);
-    const size = foodRadius(food) * grow;
-    const pulse = 1 + Math.sin(now / 250 + food.x * 3 + food.y) * 0.18;
-
-    ctx.globalAlpha = 0.16;
-    circle(ctx, cx, cy, size * 2.8 * pulse, color);
-    ctx.globalAlpha = 0.3;
-    circle(ctx, cx, cy, size * 1.7 * pulse, color);
-    ctx.globalAlpha = 1;
-    circle(ctx, cx, cy, size, color);
-    ctx.globalAlpha = 0.75;
-    circle(ctx, cx - size * 0.3, cy - size * 0.3, size * 0.38, '#ffffff');
+    ctx.globalAlpha = opacity;
+    ctx.save();
+    ctx.translate(cx, cy - 1 + bob);
+    ctx.rotate(Math.sin(now / 420 + food.x * 1.7) * 0.18);
+    ctx.scale(size, size);
+    ctx.font = EMOJI_FONT;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(emoji, 0, 1);
+    ctx.restore();
     ctx.globalAlpha = 1;
 }
 

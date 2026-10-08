@@ -11,6 +11,7 @@ import {
     DROP_TREATS,
     EAT_DISTANCE,
     FOOD,
+    FOOD_EMOJIS,
     FRUIT_LIFETIME_MS,
     FRUIT_SPAWN_MAX_MS,
     FRUIT_SPAWN_MIN_MS,
@@ -532,7 +533,7 @@ function refillFood(world) {
         if (!spot) {
             return;
         }
-        world.foods.push({ kind: 'food', ...spot, ...FOOD });
+        world.foods.push({ kind: 'food', ...spot, ...FOOD, emoji: FOOD_EMOJIS[Math.floor(world.random() * FOOD_EMOJIS.length)] });
         count++;
     }
 }

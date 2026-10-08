@@ -4,7 +4,8 @@ import { describe, test } from 'node:test';
 import { DEFAULT_ZOOM, MAX_ZOOM, MIN_ZOOM, clampZoom, createCamera, fitView, pointAt, updateCamera, viewRect } from '../../resources/js/snake/camera.js';
 import { BOTS, CELL, PLAYER } from '../../resources/js/snake/config.js';
 import { translator } from '../../resources/js/snake/i18n.js';
-import { bodyBeads, floorChips, foodColor, FOOD_COLORS } from '../../resources/js/snake/look.js';
+import { bodyBeads, floorChips, foodColor, foodEmoji, FOOD_COLORS } from '../../resources/js/snake/look.js';
+import { FOOD_EMOJIS } from '../../resources/js/snake/config.js';
 import { DEFAULT_SKIN, SKINS, isSkin, skinById, skinOf, stripeColor } from '../../resources/js/snake/skins.js';
 import { createWorld } from '../../resources/js/snake/world.js';
 
@@ -129,6 +130,16 @@ describe('look', () => {
         assert.equal(foodColor({ kind: 'food', x: 4, y: 9 }), foodColor({ kind: 'food', x: 4, y: 9 }));
         assert.ok(FOOD_COLORS.includes(foodColor({ kind: 'food', x: 4, y: 9 })));
         assert.equal(foodColor({ kind: 'drop', x: 4, y: 9, color: '#abcdef' }), '#abcdef');
+    });
+
+    test('everyday food is a little meal: its own, or for older servers one that stays the same', () => {
+        const world = createWorld(Math.random);
+        const food = world.foods.filter((f) => f.kind === 'food');
+        assert.ok(food.length > 0 && food.every((f) => FOOD_EMOJIS.includes(f.emoji)));
+
+        const plain = { kind: 'food', x: 7, y: 3 };
+        assert.ok(FOOD_EMOJIS.includes(foodEmoji(plain)));
+        assert.equal(foodEmoji(plain), foodEmoji({ ...plain }));
     });
 
     test('the floor is the same every time', () => {

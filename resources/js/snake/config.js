@@ -7,6 +7,8 @@ export const START_LENGTH = 6;
 /** One piece of food on the board for every this many cells, so bigger fields get more food. */
 export const CELLS_PER_FOOD = 220;
 export const FOOD = { points: 1, grow: 1 };
+/** Everyday food is a small bite of one of these, drawn smaller than the treats below. */
+export const FOOD_EMOJIS = ['🍕', '🥑', '🍓', '🍇', '🍒', '🍊', '🍋', '🍌', '🍎', '🍐', '🥝', '🍑', '🍍', '🥕', '🌽', '🍉'];
 
 /**
  * Treats scattered around the arena, like Worms Zone: sweets, fruit and fast food. Small ones are

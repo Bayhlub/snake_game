@@ -1,4 +1,4 @@
-import { CELL } from './config.js';
+import { CELL, FOOD_EMOJIS } from './config.js';
 import { wrapAngle } from './space.js';
 import { STICK_SIZE } from './steering.js';
 
@@ -24,20 +24,22 @@ export function foodColor(food) {
 }
 
 /**
- * How big a treat is drawn: big, and bigger the more it's worth; a crashed worm's leftovers a
- * little smaller. Near the end of its life it fades away (`opacity`) instead of blinking.
+ * How big a piece of food is drawn: everyday food small, a crashed worm's leftovers bigger, and
+ * treats big, bigger the more they're worth. Near the end of its life it fades away (`opacity`)
+ * instead of blinking.
  */
 export function treatLook(food, time) {
     const left = food.expiresAt ? food.expiresAt - time : Infinity;
-    return {
-        scale: food.kind === 'drop' ? 1.15 : 1.4 + food.points * 0.06,
-        opacity: Math.max(0, Math.min(1, left / 2000)),
-    };
+    const scale = food.kind === 'food' ? 0.95 : food.kind === 'drop' ? 1.15 : 1.4 + food.points * 0.06;
+    return { scale, opacity: Math.max(0, Math.min(1, left / 2000)) };
 }
 
-/** Food dots come in a few sizes; leftovers from a crash are the biggest. */
-export function foodRadius(food) {
-    return (food.kind === 'drop' ? 0.42 : 0.3 + (hashCell(food.x, food.y) % 5) * 0.035) * CELL;
+/**
+ * What a piece of food is: its own emoji, or for everyday food from an older game server, one picked
+ * by where it lies (so it stays the same).
+ */
+export function foodEmoji(food) {
+    return food.emoji ?? FOOD_EMOJIS[hashCell(Math.round(food.x), Math.round(food.y)) % FOOD_EMOJIS.length];
 }
 
 function hashCell(x, y) {

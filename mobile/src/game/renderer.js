@@ -13,7 +13,7 @@ import {
     decorationSpots,
     floorChips,
     foodColor,
-    foodRadius,
+    foodEmoji,
     STEER_COLOR,
     STEER_OUTLINE,
     aimArrow,
@@ -255,41 +255,29 @@ export function createRenderer({ label = (powerUp) => powerUp.label, youLabel = 
             return;
         }
 
-        // Treats (and a crashed worm's leftovers): big, bobbing and swaying, fading away at the end.
-        if (food.emoji && (food.kind === 'fruit' || food.kind === 'drop')) {
-            const { scale, opacity } = treatLook(food, world.time);
-            const size = grow * scale;
-            const bob = Math.sin(now / 260 + food.x) * 2;
-            if (opacity < 1) {
-                canvas.saveLayer(paint(fill, '#000000', opacity));
-            }
-
-            oval(canvas, cx, cy + CELL * 0.42 * size, CELL * 0.32 * size, CELL * 0.1 * size, paint(fill, '#000000', 0.3));
-
-            canvas.save();
-            canvas.translate(cx, cy - 1 + bob);
-            canvas.rotate(Math.sin(now / 420 + food.x * 1.7) * 0.18 * (180 / Math.PI), 0, 0);
-            canvas.scale(size, size);
-            if (!drawCenteredText(canvas, food.emoji, CELL * 0.95, '#ffffff', 0, 1)) {
-                circle(canvas, 0, 1, CELL * 0.38, food.color ?? '#fb7185');
-                circle(canvas, -CELL * 0.12, -CELL * 0.1, CELL * 0.1, '#ffffff', 0.6);
-            }
-            canvas.restore();
-            if (opacity < 1) {
-                canvas.restore();
-            }
-            return;
+        // Food, treats and a crashed worm's leftovers: little meals bobbing and swaying, fading away at the end.
+        const emoji = foodEmoji(food);
+        const { scale, opacity } = treatLook(food, world.time);
+        const size = grow * scale;
+        const bob = Math.sin(now / 260 + food.x) * 2;
+        if (opacity < 1) {
+            canvas.saveLayer(paint(fill, '#000000', opacity));
         }
 
-        // A glowing candy dot: a soft halo, a bright ball and a little shine.
-        const color = foodColor(food);
-        const size = foodRadius(food) * grow;
-        const pulse = 1 + Math.sin(now / 250 + food.x * 3 + food.y) * 0.18;
+        oval(canvas, cx, cy + CELL * 0.42 * size, CELL * 0.32 * size, CELL * 0.1 * size, paint(fill, '#000000', 0.3));
 
-        circle(canvas, cx, cy, size * 2.8 * pulse, color, 0.16);
-        circle(canvas, cx, cy, size * 1.7 * pulse, color, 0.3);
-        circle(canvas, cx, cy, size, color);
-        circle(canvas, cx - size * 0.3, cy - size * 0.3, size * 0.38, '#ffffff', 0.75);
+        canvas.save();
+        canvas.translate(cx, cy - 1 + bob);
+        canvas.rotate(Math.sin(now / 420 + food.x * 1.7) * 0.18 * (180 / Math.PI), 0, 0);
+        canvas.scale(size, size);
+        if (!drawCenteredText(canvas, emoji, CELL * 0.95, '#ffffff', 0, 1)) {
+            circle(canvas, 0, 1, CELL * 0.38, food.color ?? '#fb7185');
+            circle(canvas, -CELL * 0.12, -CELL * 0.1, CELL * 0.1, '#ffffff', 0.6);
+        }
+        canvas.restore();
+        if (opacity < 1) {
+            canvas.restore();
+        }
     }
 
     /**
