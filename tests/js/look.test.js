@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 
-import { DEFAULT_ZOOM, MAX_ZOOM, MIN_ZOOM, clampZoom, createCamera, fitView, pointAt, updateCamera, viewRect } from '../../resources/js/snake/camera.js';
+import { DEFAULT_ZOOM, MAX_ZOOM, MIN_ZOOM, clampZoom, createCamera, fitView, pointAt, updateCamera, viewRect, zoomForLength } from '../../resources/js/snake/camera.js';
 import { BOTS, CELL, PLAYER } from '../../resources/js/snake/config.js';
 import { translator } from '../../resources/js/snake/i18n.js';
 import { bodyBeads, floorChips, foodColor, foodEmoji, FOOD_COLORS } from '../../resources/js/snake/look.js';
@@ -75,6 +75,13 @@ describe('camera', () => {
         const camera = settle(createCamera(), head, 1.5);
         updateCamera(camera, { width: WIDTH, height: HEIGHT, focus: head, zoom: 3, elapsedMs: 16 });
         assert.ok(camera.zoom > 1.5 && camera.zoom < 3);
+    });
+
+    test('the camera pulls back further the longer your worm grows, but not without end', () => {
+        assert.equal(zoomForLength(6), 1);
+        assert.ok(zoomForLength(30) < 1);
+        assert.ok(zoomForLength(80) < zoomForLength(30));
+        assert.equal(zoomForLength(1000), 0.5);
     });
 
     test('zoom stays between the limits', () => {

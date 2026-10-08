@@ -1,4 +1,4 @@
-import { CELL } from './config.js';
+import { CELL, START_LENGTH } from './config.js';
 
 /** Zoom 1 shows the whole field; bigger numbers zoom in on your worm. */
 export const MIN_ZOOM = 1;
@@ -9,6 +9,15 @@ const EDGE_MARGIN = 3;
 /** How quickly the camera catches up with the worm and with zoom changes (ms; smaller is snappier). */
 const FOLLOW_MS = 110;
 const ZOOM_MS = 160;
+
+/**
+ * How much the camera pulls back for a worm this long: not at all at the start, and gradually more
+ * as it grows (to half the zoom at around 130 segments), so a long worm still sees around itself.
+ * Your own zoom (pinch, +/−) is multiplied by this.
+ */
+export function zoomForLength(length) {
+    return Math.max(0.5, 1 / (1 + Math.max(0, length - START_LENGTH) * 0.008));
+}
 
 export function clampZoom(zoom) {
     return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Number.isFinite(zoom) ? zoom : DEFAULT_ZOOM));

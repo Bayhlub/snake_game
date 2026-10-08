@@ -9,6 +9,7 @@ import {
     bodyBeads,
     bodyRadius,
     createCamera,
+    zoomForLength,
     fitView,
     decorationSpots,
     floorChips,
@@ -51,11 +52,22 @@ stroke.setStyle(PaintStyle.Stroke);
 stroke.setStrokeCap(StrokeCap.Round);
 stroke.setStrokeJoin(StrokeJoin.Round);
 
+/** Colors are read from their text once and remembered: drawing uses the same few hundred times a frame. */
+const colors = new Map();
+function skiaColor(color) {
+    let parsed = colors.get(color);
+    if (!parsed) {
+        parsed = Skia.Color(color);
+        colors.set(color, parsed);
+    }
+    return parsed;
+}
+
 function paint(base, color, alpha = 1) {
     base.setShader(null);
     base.setMaskFilter(null);
     base.setPathEffect(null);
-    base.setColor(Skia.Color(color));
+    base.setColor(skiaColor(color));
     base.setAlphaf(Math.max(0, Math.min(1, alpha)));
     return base;
 }
@@ -64,6 +76,18 @@ function line(color, width, alpha = 1) {
     const linePaint = paint(stroke, color, alpha);
     linePaint.setStrokeWidth(width);
     return linePaint;
+}
+
+/** Fill many circles ([x, y, radius] each) as one shape, in one color. */
+function fillCircles(canvas, circles, color, alpha = 1) {
+    if (!circles.length) {
+        return;
+    }
+    const shape = Skia.PathBuilder.Make();
+    for (const [x, y, radius] of circles) {
+        shape.addCircle(x, y, Math.max(radius, 0));
+    }
+    canvas.drawPath(shape.build(), paint(fill, color, alpha));
 }
 
 function circle(canvas, x, y, radius, color, alpha = 1) {
@@ -450,7 +474,9 @@ export function createRenderer({ label = (powerUp) => powerUp.label, youLabel = 
             const fit = fitView(WIDTH, HEIGHT, width, height);
             const SCREEN_W = fit.viewWidth;
             const SCREEN_H = fit.viewHeight;
-            updateCamera(camera, { width: WIDTH, height: HEIGHT, viewWidth: SCREEN_W, viewHeight: SCREEN_H, focus, zoom, elapsedMs });
+            // The camera pulls back as your worm grows.
+            const followZoom = zoom * zoomForLength(me?.body.length ?? 0);
+            updateCamera(camera, { width: WIDTH, height: HEIGHT, viewWidth: SCREEN_W, viewHeight: SCREEN_H, focus, zoom: followZoom, elapsedMs });
             const view = viewRect(camera);
             const isVisible = (x, y, margin = CELL * 2) =>
                 x > view.left - margin && x < view.left + view.width + margin && y > view.top - margin && y < view.top + view.height + margin;
@@ -638,17 +664,23 @@ function drawWorm(canvas, snake, points, { now, lookAt, dead, glow }) {
     }
     const skin = dead ? DEAD_SKIN : skinOf(snake);
 
+    // A long worm is hundreds of beads, so each layer is drawn as a few shapes rather than bead by bead:
+    // the rim in one, the stripes one run of a color at a time (tail to head), and the shine in one.
     const beads = bodyBeads(points);
-    const rim = shade(skin.color, 0.55);
+    fillCircles(canvas, beads.map((bead) => [bead.x, bead.y, bead.r + 1.6]), shade(skin.color, 0.55));
+    let run = [];
+    let runColor = null;
     for (const bead of beads) {
-        circle(canvas, bead.x, bead.y, bead.r + 1.6, rim);
+        const color = stripeColor(skin, bead.segment);
+        if (color !== runColor && run.length) {
+            fillCircles(canvas, run, runColor);
+            run = [];
+        }
+        runColor = color;
+        run.push([bead.x, bead.y, bead.r]);
     }
-    for (const bead of beads) {
-        circle(canvas, bead.x, bead.y, bead.r, stripeColor(skin, bead.segment));
-    }
-    for (const bead of beads) {
-        circle(canvas, bead.x - bead.r * 0.25, bead.y - bead.r * 0.3, bead.r * 0.42, '#ffffff', 0.22);
-    }
+    fillCircles(canvas, run, runColor);
+    fillCircles(canvas, beads.map((bead) => [bead.x - bead.r * 0.25, bead.y - bead.r * 0.3, bead.r * 0.42]), '#ffffff', 0.22);
 
     if (skin.decoration) {
         const size = bodyRadius(points.length) * 0.62;

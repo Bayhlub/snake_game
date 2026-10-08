@@ -1,4 +1,4 @@
-import { createCamera, fitView, pointAt, updateCamera, viewRect } from './camera.js';
+import { createCamera, fitView, pointAt, updateCamera, viewRect, zoomForLength } from './camera.js';
 import { CELL } from './config.js';
 import {
     DEAD_SKIN,
@@ -269,7 +269,9 @@ export function createRenderer(canvas, cols, rows, { label = (powerUp) => powerU
             }
             const fit = fitView(fieldWidth, fieldHeight, width, height);
             const focus = follow && me?.alive ? points.get(me)[0] : null;
-            updateCamera(camera, { width: fieldWidth, height: fieldHeight, viewWidth: fit.viewWidth, viewHeight: fit.viewHeight, focus, zoom, elapsedMs });
+            // The camera pulls back as your worm grows.
+            const followZoom = zoom * zoomForLength(me?.body.length ?? 0);
+            updateCamera(camera, { width: fieldWidth, height: fieldHeight, viewWidth: fit.viewWidth, viewHeight: fit.viewHeight, focus, zoom: followZoom, elapsedMs });
             const view = viewRect(camera);
             const isVisible = (x, y, margin = CELL * 2) =>
                 x > view.left - margin && x < view.left + view.width + margin && y > view.top - margin && y < view.top + view.height + margin;
@@ -486,19 +488,23 @@ function drawWorm(ctx, snake, points, { now, lookAt, dead, glow }) {
     const skin = dead ? DEAD_SKIN : skinOf(snake);
 
     // A dark rim around the whole body first, then the striped beads, then a shine along the top.
+    // A long worm is hundreds of beads, so each layer is drawn as a few shapes rather than bead by bead:
+    // the rim in one, the stripes one run of a color at a time (tail to head), and the shine in one.
     const beads = bodyBeads(points);
-    const rim = shade(skin.color, 0.55);
+    fillCircles(ctx, beads.map((bead) => [bead.x, bead.y, bead.r + 1.6]), shade(skin.color, 0.55));
+    let run = [];
+    let runColor = null;
     for (const bead of beads) {
-        circle(ctx, bead.x, bead.y, bead.r + 1.6, rim);
+        const color = stripeColor(skin, bead.segment);
+        if (color !== runColor && run.length) {
+            fillCircles(ctx, run, runColor);
+            run = [];
+        }
+        runColor = color;
+        run.push([bead.x, bead.y, bead.r]);
     }
-    for (const bead of beads) {
-        circle(ctx, bead.x, bead.y, bead.r, stripeColor(skin, bead.segment));
-    }
-    ctx.globalAlpha = 0.22;
-    for (const bead of beads) {
-        circle(ctx, bead.x - bead.r * 0.25, bead.y - bead.r * 0.3, bead.r * 0.42, '#ffffff');
-    }
-    ctx.globalAlpha = 1;
+    fillCircles(ctx, run, runColor);
+    fillCircles(ctx, beads.map((bead) => [bead.x - bead.r * 0.25, bead.y - bead.r * 0.3, bead.r * 0.42]), '#ffffff', 0.22);
 
     if (skin.decoration) {
         const size = bodyRadius(points.length) * 0.62;
@@ -922,6 +928,22 @@ function polygon(ctx, corners) {
     corners.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
     ctx.closePath();
     ctx.fill();
+}
+
+/** Fill many circles ([x, y, radius] each) as one shape, in one color. */
+function fillCircles(ctx, circles, color, alpha = 1) {
+    if (!circles.length) {
+        return;
+    }
+    const shape = new Path2D();
+    for (const [x, y, radius] of circles) {
+        shape.moveTo(x + radius, y);
+        shape.arc(x, y, Math.max(radius, 0), 0, Math.PI * 2);
+    }
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = color;
+    ctx.fill(shape);
+    ctx.globalAlpha = 1;
 }
 
 function circle(ctx, x, y, radius, color) {
